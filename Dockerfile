@@ -4,7 +4,7 @@ WORKDIR /app
 COPY package*.json ./
 RUN npm install
 COPY . .
-ENV PORT=8787
+ENV PORT=8080
 ENV REMOTION_BROWSER_EXECUTABLE=/usr/bin/chromium
-EXPOSE 8787
+EXPOSE 8080
 CMD ["node","server.mjs"]
