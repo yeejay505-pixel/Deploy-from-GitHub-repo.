@@ -3,7 +3,8 @@ import path from 'node:path';
 import fs from 'node:fs/promises';
 import {fileURLToPath} from 'node:url';
 import {bundle} from '@remotion/bundler';
-import {renderFrames,selectComposition,stitchFramesToVideo} from '@remotion/renderer';
+import {renderFrames,selectComposition} from '@remotion/renderer';
+import {spawn} from 'node:child_process';
 
 const here=path.dirname(fileURLToPath(import.meta.url));
 const outputs=path.join(here,'outputs');
@@ -80,9 +81,9 @@ app.get('/health',async(req,res)=>{
   res.json({
     ok:true,
     service:'explainer-render-worker',
-    version:'0.9.5',
-    renderProfile:'two-stage-540x960',
-    strategy:'renderFrames-then-stitch',
+    version:'0.9.6',
+    renderProfile:'direct-ffmpeg-540x960',
+    strategy:'renderFrames-then-system-ffmpeg',
     memoryMax,
     heapMb:Math.round(process.memoryUsage().heapUsed/1024/1024)
   });
@@ -130,18 +131,27 @@ async function renderOne(body,req){
 
     await new Promise(r=>setTimeout(r,250));
 
-    await stitchFramesToVideo({
-      fps:composition.fps,
-      width,
-      height,
-      assetsInfo,
-      outputLocation,
-      codec:'h264',
-      pixelFormat:'yuv420p',
-      crf:24,
-      muted:true,
-      x264Preset:'superfast',
-      verbose:true
+    const pattern=path.join(frameDir,'element-%03d.jpeg');
+    await new Promise((resolve,reject)=>{
+      const args=[
+        '-y',
+        '-framerate',String(composition.fps),
+        '-i',pattern,
+        '-c:v','libx264',
+        '-preset','superfast',
+        '-crf','24',
+        '-pix_fmt','yuv420p',
+        '-movflags','+faststart',
+        outputLocation
+      ];
+      const ff=spawn('ffmpeg',args,{stdio:['ignore','pipe','pipe']});
+      let stderr='';
+      ff.stderr.on('data',d=>{stderr+=d.toString(); if(stderr.length>12000) stderr=stderr.slice(-12000);});
+      ff.on('error',reject);
+      ff.on('close',(code,signal)=>{
+        if(code===0)return resolve();
+        reject(new Error(`System FFmpeg failed with code ${code}${signal?` (${signal})`:''}: ${stderr.slice(-5000)}`));
+      });
     });
   } finally {
     await fs.rm(frameDir,{recursive:true,force:true}).catch(()=>{});
@@ -159,7 +169,7 @@ async function renderOne(body,req){
     renderMs:Date.now()-started,
     width,
     height,
-    strategy:'renderFrames-then-stitch'
+    strategy:'renderFrames-then-system-ffmpeg'
   };
 }
 
