@@ -1,0 +1,17 @@
+{
+  "project_id": "VID-20260923-860786371",
+  "build_version": "build-20260924094037",
+  "fps": 30,
+  "width": 1080,
+  "height": 1920,
+  "scenes": [
+    {"scene_id":"S01","start_sec":0.058,"duration_sec":5.399,"components":[{"beat_id":"B01","component_id":"RMT_HERO_MORPH","start_sec":0.058,"end_sec":3.669,"on_screen_text":["IT TRIED STREAMING.","WHY DID IT COLLAPSE?"]},{"beat_id":"B02","component_id":"MC_MULTI_FORCE_COMPARE","start_sec":3.866,"end_sec":5.457,"on_screen_text":["NETFLIX ≠ THE WHOLE STORY"]}]},
+    {"scene_id":"S02","start_sec":5.677,"duration_sec":9.532,"components":[{"beat_id":"B03","component_id":"MC_MILESTONE_TIMELINE","start_sec":5.677,"end_sec":8.777,"on_screen_text":["2004","ONLINE RENTALS LAUNCH"]},{"beat_id":"B04","component_id":"RMT_CHANNEL_DASHBOARD","start_sec":8.975,"end_sec":11.227,"on_screen_text":["MAIL","KIOSK","ON DEMAND"]},{"beat_id":"B05","component_id":"THREE_RETAIL_CUTAWAY","start_sec":11.633,"end_sec":15.209,"on_screen_text":["STORES","SHELVES","RETURNS"]}]},
+    {"scene_id":"S03","start_sec":15.685,"duration_sec":10.379,"components":[{"beat_id":"B06","component_id":"MC_CUSTOMER_JOURNEY","start_sec":15.685,"end_sec":18.634,"on_screen_text":["STORE TRIP","DVD BY MAIL"]},{"beat_id":"B07","component_id":"RMT_OPTION_FAN","start_sec":18.692,"end_sec":22.5,"on_screen_text":["CHEAP KIOSK","BUY DVD","ON DEMAND"]},{"beat_id":"B08","component_id":"MC_FLOW_RESERVOIR","start_sec":22.906,"end_sec":26.064,"on_screen_text":["FUND NEW SERVICES","STORE BUSINESS SHRINKS"]}]},
+    {"scene_id":"S04","start_sec":26.819,"duration_sec":6.339,"components":[{"beat_id":"B09","component_id":"D3_BAR_REVEAL","start_sec":26.819,"end_sec":30.186,"on_screen_text":["REVENUE","$5.07B","2008"],"data":{"value":5.07}},{"beat_id":"B10","component_id":"D3_BAR_REVEAL","start_sec":30.383,"end_sec":33.158,"on_screen_text":["$4.06B","2009","REVENUE FELL"],"data":{"value":4.06,"previous":5.07}}]},
+    {"scene_id":"S05","start_sec":33.715,"duration_sec":6.514,"components":[{"beat_id":"B11","component_id":"THREE_CONSTRAINED_PIVOT","start_sec":33.715,"end_sec":35.213,"on_screen_text":["DEBT MADE THE PIVOT HARDER"]},{"beat_id":"B12","component_id":"RMT_STAT_REVEAL","start_sec":35.77,"end_sec":40.229,"on_screen_text":["2010","NEARLY $1 BILLION DEBT"]}]},
+    {"scene_id":"S06","start_sec":40.635,"duration_sec":7.605,"components":[{"beat_id":"B13","component_id":"MC_CAPITAL_RACE","start_sec":40.635,"end_sec":44.861,"on_screen_text":["LIMITED INVESTMENT","CHEAPER","MORE CONVENIENT"]},{"beat_id":"B14","component_id":"RMT_TIMELINE_CARD","start_sec":45.267,"end_sec":48.24,"on_screen_text":["CHAPTER 11","SEPTEMBER 2010"]}]},
+    {"scene_id":"S07","start_sec":48.646,"duration_sec":5.898,"components":[{"beat_id":"B15","component_id":"RMT_ASSET_TRANSFER","start_sec":48.646,"end_sec":50.945,"on_screen_text":["ASSETS ACQUIRED","APRIL 2011"]},{"beat_id":"B16","component_id":"THREE_STOREFRONT_ROW","start_sec":51.026,"end_sec":54.544,"on_screen_text":["U.S. COMPANY-OWNED STORES CLOSED","EARLY 2014"]}]},
+    {"scene_id":"S08","start_sec":54.951,"duration_sec":4.075,"components":[{"beat_id":"B17","component_id":"MC_CAUSAL_BOTTLENECK","start_sec":54.951,"end_sec":59.026,"on_screen_text":["NOT ONE MISSED MOVE","COSTLY STORES + DEBT","SLOW PIVOT"]}]}
+  ]
+}
