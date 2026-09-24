@@ -6,7 +6,7 @@ import {bundle} from '@remotion/bundler';
 import {renderMedia,selectComposition} from '@remotion/renderer';
 const here=path.dirname(fileURLToPath(import.meta.url)), outputs=path.join(here,'outputs');
 await fs.mkdir(outputs,{recursive:true});
-const app=express(), PORT=Number(process.env.PORT||8787), TOKEN=process.env.RENDER_TOKEN||'';
+const app=express(), PORT=Number(process.env.PORT||8080), TOKEN=process.env.RENDER_TOKEN||'';
 let bundlePromise=null,queue=Promise.resolve();
 const getBundle=()=>bundlePromise??=(bundle({entryPoint:path.join(here,'src/index.jsx')}));
 app.use(express.json({limit:'8mb'})); app.use('/outputs',express.static(outputs));
