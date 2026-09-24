@@ -3,11 +3,13 @@ import path from 'node:path';
 import fs from 'node:fs/promises';
 import {fileURLToPath} from 'node:url';
 import {bundle} from '@remotion/bundler';
-import {renderMedia,selectComposition} from '@remotion/renderer';
+import {renderFrames,selectComposition,stitchFramesToVideo} from '@remotion/renderer';
 
 const here=path.dirname(fileURLToPath(import.meta.url));
 const outputs=path.join(here,'outputs');
+const frameRoot=path.join(here,'frame-cache');
 await fs.mkdir(outputs,{recursive:true});
+await fs.mkdir(frameRoot,{recursive:true});
 
 const app=express();
 const PORT=Number(process.env.PORT||8080);
@@ -60,13 +62,7 @@ function normalizeScene(raw={}){
     };
   });
 
-  return {
-    ...raw,
-    start_sec:start,
-    end_sec:end,
-    duration_sec:duration,
-    components
-  };
+  return {...raw,start_sec:start,end_sec:end,duration_sec:duration,components};
 }
 
 app.use(express.json({limit:'8mb'}));
@@ -81,7 +77,15 @@ app.use((req,res,next)=>{
 app.get('/health',async(req,res)=>{
   let memoryMax=null;
   try{memoryMax=(await fs.readFile('/sys/fs/cgroup/memory.max','utf8')).trim();}catch{}
-  res.json({ok:true,service:'explainer-render-worker',version:'0.9.3',renderProfile:'low-memory-540x960',memoryMax,heapMb:Math.round(process.memoryUsage().heapUsed/1024/1024)});
+  res.json({
+    ok:true,
+    service:'explainer-render-worker',
+    version:'0.9.4',
+    renderProfile:'two-stage-540x960',
+    strategy:'renderFrames-then-stitch',
+    memoryMax,
+    heapMb:Math.round(process.memoryUsage().heapUsed/1024/1024)
+  });
 });
 
 async function renderOne(body,req){
@@ -100,21 +104,47 @@ async function renderOne(body,req){
   const safeBatch=String(renderBatchId||'batch').replace(/[^A-Za-z0-9_-]/g,'_');
   const fileName=`${safeProject}_${safeBatch}_${scene.scene_id}.mp4`;
   const outputLocation=path.join(outputs,fileName);
+  const frameDir=path.join(frameRoot,`${safeProject}_${safeBatch}_${scene.scene_id}`);
+  const scale=0.5;
+  const width=Math.round(composition.width*scale);
+  const height=Math.round(composition.height*scale);
 
-  await renderMedia({
-    composition,
-    serveUrl,
-    codec:'h264',
-    outputLocation,
-    inputProps,
-    crf:23,
-    pixelFormat:'yuv420p',
-    muted:true,
-    scale:0.5,
-    concurrency:1,
-    disallowParallelEncoding:true,
-    browserExecutable:process.env.REMOTION_BROWSER_EXECUTABLE||undefined
-  });
+  await fs.rm(frameDir,{recursive:true,force:true});
+  await fs.mkdir(frameDir,{recursive:true});
+
+  try{
+    const {assetsInfo}=await renderFrames({
+      composition,
+      serveUrl,
+      outputDir:frameDir,
+      inputProps,
+      imageFormat:'jpeg',
+      jpegQuality:68,
+      scale,
+      concurrency:1,
+      muted:true,
+      logLevel:'warn',
+      browserExecutable:process.env.REMOTION_BROWSER_EXECUTABLE||undefined,
+      chromiumOptions:{enableMultiProcessOnLinux:false}
+    });
+
+    await new Promise(r=>setTimeout(r,250));
+
+    await stitchFramesToVideo({
+      fps:composition.fps,
+      width,
+      height,
+      assetsInfo,
+      outputLocation,
+      codec:'h264',
+      pixelFormat:'yuv420p',
+      crf:24,
+      muted:true,
+      x264Preset:'superfast'
+    });
+  } finally {
+    await fs.rm(frameDir,{recursive:true,force:true}).catch(()=>{});
+  }
 
   const base=`${req.protocol}://${req.get('host')}`;
   return {
@@ -125,7 +155,10 @@ async function renderOne(body,req){
     sceneId:scene.scene_id,
     outputFileName:fileName,
     outputUrl:`${base}/outputs/${encodeURIComponent(fileName)}`,
-    renderMs:Date.now()-started
+    renderMs:Date.now()-started,
+    width,
+    height,
+    strategy:'renderFrames-then-stitch'
   };
 }
 
