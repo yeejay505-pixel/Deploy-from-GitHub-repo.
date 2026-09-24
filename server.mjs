@@ -81,7 +81,7 @@ app.use((req,res,next)=>{
 app.get('/health',async(req,res)=>{
   let memoryMax=null;
   try{memoryMax=(await fs.readFile('/sys/fs/cgroup/memory.max','utf8')).trim();}catch{}
-  res.json({ok:true,service:'explainer-render-worker',version:'0.9.2',memoryMax,heapMb:Math.round(process.memoryUsage().heapUsed/1024/1024)});
+  res.json({ok:true,service:'explainer-render-worker',version:'0.9.3',renderProfile:'low-memory-540x960',memoryMax,heapMb:Math.round(process.memoryUsage().heapUsed/1024/1024)});
 });
 
 async function renderOne(body,req){
@@ -107,9 +107,10 @@ async function renderOne(body,req){
     codec:'h264',
     outputLocation,
     inputProps,
-    crf:20,
+    crf:23,
     pixelFormat:'yuv420p',
     muted:true,
+    scale:0.5,
     concurrency:1,
     disallowParallelEncoding:true,
     browserExecutable:process.env.REMOTION_BROWSER_EXECUTABLE||undefined
