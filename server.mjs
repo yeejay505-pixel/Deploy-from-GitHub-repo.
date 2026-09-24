@@ -80,7 +80,7 @@ app.get('/health',async(req,res)=>{
   res.json({
     ok:true,
     service:'explainer-render-worker',
-    version:'0.9.4',
+    version:'0.9.5',
     renderProfile:'two-stage-540x960',
     strategy:'renderFrames-then-stitch',
     memoryMax,
@@ -140,7 +140,8 @@ async function renderOne(body,req){
       pixelFormat:'yuv420p',
       crf:24,
       muted:true,
-      x264Preset:'superfast'
+      x264Preset:'superfast',
+      verbose:true
     });
   } finally {
     await fs.rm(frameDir,{recursive:true,force:true}).catch(()=>{});
@@ -162,15 +163,40 @@ async function renderOne(body,req){
   };
 }
 
+function compactError(e){
+  const raw=String(e?.message||e||'Unknown error');
+  const lines=raw.split('\n').map(s=>s.trim()).filter(Boolean);
+  const tail=lines.slice(-18).join(' | ');
+  return tail.slice(-3000);
+}
+
+app.get('/test-s01',async(req,res)=>{
+  try{
+    const manifest=JSON.parse(await fs.readFile(path.join(here,'src','manifest.json'),'utf8'));
+    const scene=manifest.scenes?.[0];
+    const result=await renderOne({
+      projectId:manifest.project_id,
+      buildVersion:manifest.build_version,
+      renderBatchId:'browser-test',
+      scene
+    },req);
+    res.json(result);
+  }catch(e){
+    const error=compactError(e);
+    console.error('test-s01 failed',error);
+    res.status(500).json({ok:false,error});
+  }
+});
+
 app.post('/render-scene',(req,res)=>{
   const job=()=>renderOne(req.body,req);
   const p=queue.then(job,job);
   queue=p.catch(()=>{});
   p.then(x=>res.json(x)).catch((e)=>{
-    const message=e?.message||String(e);
+    const error=compactError(e);
     const stack=String(e?.stack||'').split('\n').slice(0,8).join('\n');
-    console.error('render-scene failed',message,stack);
-    res.status(500).json({ok:false,error:message,details:stack});
+    console.error('render-scene failed',error,stack);
+    res.status(500).json({ok:false,error,details:stack});
   });
 });
 
