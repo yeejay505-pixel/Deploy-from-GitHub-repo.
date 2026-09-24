@@ -78,7 +78,11 @@ app.use((req,res,next)=>{
   next();
 });
 
-app.get('/health',(req,res)=>res.json({ok:true,service:'explainer-render-worker',version:'0.9.1'}));
+app.get('/health',async(req,res)=>{
+  let memoryMax=null;
+  try{memoryMax=(await fs.readFile('/sys/fs/cgroup/memory.max','utf8')).trim();}catch{}
+  res.json({ok:true,service:'explainer-render-worker',version:'0.9.2',memoryMax,heapMb:Math.round(process.memoryUsage().heapUsed/1024/1024)});
+});
 
 async function renderOne(body,req){
   const started=Date.now();
@@ -103,9 +107,11 @@ async function renderOne(body,req){
     codec:'h264',
     outputLocation,
     inputProps,
-    crf:18,
+    crf:20,
     pixelFormat:'yuv420p',
     muted:true,
+    concurrency:1,
+    disallowParallelEncoding:true,
     browserExecutable:process.env.REMOTION_BROWSER_EXECUTABLE||undefined
   });
 
