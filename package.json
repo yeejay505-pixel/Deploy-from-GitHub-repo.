@@ -1,0 +1,26 @@
+{
+  "name": "explainer-render-worker",
+  "version": "0.9.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "start": "node server.mjs",
+    "studio": "remotion studio src/index.jsx",
+    "render:all": "node scripts/render-all.mjs",
+    "check": "node --check server.mjs && node --check scripts/render-all.mjs"
+  },
+  "dependencies": {
+    "@react-three/fiber": "^9.0.0",
+    "@remotion/bundler": "^4.0.0",
+    "@remotion/renderer": "^4.0.0",
+    "@remotion/three": "^4.0.0",
+    "express": "^5.1.0",
+    "react": "^19.0.0",
+    "react-dom": "^19.0.0",
+    "remotion": "^4.0.0",
+    "three": "^0.180.0"
+  },
+  "engines": {
+    "node": ">=20"
+  }
+}
