@@ -5,18 +5,24 @@ import {fileURLToPath} from 'node:url';
 import {bundle} from '@remotion/bundler';
 import {renderFrames,selectComposition} from '@remotion/renderer';
 import {spawn} from 'node:child_process';
+import multer from 'multer';
+import {createAssemblyHandler} from './assembly.mjs';
 
 const here=path.dirname(fileURLToPath(import.meta.url));
 const outputs=path.join(here,'outputs');
+const uploads=path.join(here,'uploads');
 const frameRoot=path.join(here,'frame-cache');
 await fs.mkdir(outputs,{recursive:true});
+await fs.mkdir(uploads,{recursive:true});
 await fs.mkdir(frameRoot,{recursive:true});
 
 const app=express();
+app.set('trust proxy',1);
 const PORT=Number(process.env.PORT||8080);
 const TOKEN=process.env.RENDER_TOKEN||'';
 let bundlePromise=null;
 let queue=Promise.resolve();
+const upload=multer({dest:uploads});
 
 const getBundle=()=>bundlePromise??=bundle({entryPoint:path.join(here,'src/index.jsx')});
 
@@ -81,9 +87,9 @@ app.get('/health',async(req,res)=>{
   res.json({
     ok:true,
     service:'explainer-render-worker',
-    version:'0.9.6',
-    renderProfile:'direct-ffmpeg-540x960',
-    strategy:'renderFrames-then-system-ffmpeg',
+    version:'0.10.0',
+    renderProfile:'direct-ffmpeg-540x960+final-assembly',
+    strategy:'renderFrames-system-ffmpeg-final-assembly',
     memoryMax,
     heapMb:Math.round(process.memoryUsage().heapUsed/1024/1024)
   });
@@ -209,5 +215,7 @@ app.post('/render-scene',(req,res)=>{
     res.status(500).json({ok:false,error,details:stack});
   });
 });
+
+app.post('/assemble-final',upload.single('voice'),createAssemblyHandler({here,outputs}));
 
 app.listen(PORT,'0.0.0.0',()=>console.log(`render-worker listening on :${PORT}`));
