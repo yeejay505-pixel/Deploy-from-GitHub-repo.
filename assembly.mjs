@@ -72,7 +72,7 @@ async function synthSfx(events,dir,targetDuration){
     } else {
       source=`sine=frequency=${spec.freq}:duration=${spec.dur}:sample_rate=48000`;
     }
-    const af=`${spec.filter},afade=t=out:st=${Math.max(0,spec.dur-.06)}:d=.06,volume=${spec.vol}`;
+    const af=`${spec.filter},afade=t=out:st=${Math.max(0,spec.dur-0.06)}:d=0.06,volume=${spec.vol}`;
     await run('ffmpeg',['-y','-f','lavfi','-i',source,'-af',af,'-ar','48000','-ac','2','-c:a','pcm_s16le',out]);
     files.push({path:out,timeSec:e.timeSec});
   }
