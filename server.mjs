@@ -87,7 +87,7 @@ app.get('/health',async(req,res)=>{
   res.json({
     ok:true,
     service:'explainer-render-worker',
-    version:'0.10.0',
+    version:'0.10.1',
     renderProfile:'direct-ffmpeg-540x960+final-assembly',
     strategy:'renderFrames-system-ffmpeg-final-assembly',
     memoryMax,
