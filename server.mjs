@@ -87,7 +87,7 @@ app.get('/health',async(req,res)=>{
   res.json({
     ok:true,
     service:'explainer-render-worker',
-    version:'0.10.1',
+    version:'0.10.2',
     renderProfile:'direct-ffmpeg-540x960+final-assembly',
     strategy:'renderFrames-system-ffmpeg-final-assembly',
     memoryMax,
@@ -213,6 +213,40 @@ app.post('/render-scene',(req,res)=>{
     const stack=String(e?.stack||'').split('\n').slice(0,8).join('\n');
     console.error('render-scene failed',error,stack);
     res.status(500).json({ok:false,error,details:stack});
+  });
+});
+
+app.post('/refresh-scenes',async(req,res)=>{
+  const body=req.body||{};
+  const requests=Array.isArray(body.requests)?body.requests:[];
+  if(!requests.length) return res.status(400).json({ok:false,error:'Missing requests array'});
+
+  const results=[];
+  for(const item of requests){
+    try{
+      const result=await renderOne(item,req);
+      results.push(result);
+    }catch(e){
+      const error=compactError(e);
+      console.error('refresh-scenes item failed',item?.scene?.scene_id||'',error);
+      results.push({
+        ok:false,
+        sceneId:item?.scene?.scene_id||'',
+        projectId:item?.projectId||'',
+        renderBatchId:item?.renderBatchId||'',
+        error
+      });
+    }
+    await new Promise(r=>setTimeout(r,350));
+  }
+
+  const failed=results.filter(x=>x.ok!==true).length;
+  res.status(failed?207:200).json({
+    ok:failed===0,
+    total:results.length,
+    rendered:results.length-failed,
+    failed,
+    results
   });
 });
 
