@@ -87,8 +87,8 @@ app.get('/health',async(req,res)=>{
   res.json({
     ok:true,
     service:'explainer-render-worker',
-    version:'0.10.2',
-    renderProfile:'direct-ffmpeg-540x960+final-assembly',
+    version:'0.11.0',
+    renderProfile:'production-preview-540x960+final-assembly',
     strategy:'renderFrames-system-ffmpeg-final-assembly',
     memoryMax,
     heapMb:Math.round(process.memoryUsage().heapUsed/1024/1024)
@@ -179,6 +179,107 @@ async function renderOne(body,req){
   };
 }
 
+
+async function renderProductionOne(body,req){
+  const started=Date.now();
+  const {
+    projectId,
+    qualityVersion,
+    productionBuildVersion,
+    renderTestId='premium-test',
+    sceneManifest={},
+    recipes=[],
+    assetTasks=[]
+  }=body||{};
+
+  if(sceneManifest.scene_id!=='S02'){
+    throw new Error('Production renderer v0.11.0 currently validates S02 first. Received '+String(sceneManifest.scene_id||'missing'));
+  }
+
+  const serveUrl=await getBundle();
+  const inputProps={package:{sceneManifest,recipes,assetTasks,qualityVersion,productionBuildVersion}};
+  const composition=await selectComposition({serveUrl,id:'ProductionScene',inputProps});
+
+  const safeProject=String(projectId||'project').replace(/[^A-Za-z0-9_-]/g,'_');
+  const safeBuild=String(productionBuildVersion||'prod').replace(/[^A-Za-z0-9_-]/g,'_');
+  const safeTest=String(renderTestId||'test').replace(/[^A-Za-z0-9_-]/g,'_');
+  const fileName=`${safeProject}_${safeBuild}_${sceneManifest.scene_id}_${safeTest}.mp4`;
+  const outputLocation=path.join(outputs,fileName);
+  const frameDir=path.join(frameRoot,`${safeProject}_${safeBuild}_${sceneManifest.scene_id}_${safeTest}`);
+
+  const scale=0.5;
+  const width=Math.round(composition.width*scale);
+  const height=Math.round(composition.height*scale);
+
+  await fs.rm(frameDir,{recursive:true,force:true});
+  await fs.mkdir(frameDir,{recursive:true});
+
+  try{
+    await renderFrames({
+      composition,
+      serveUrl,
+      outputDir:frameDir,
+      inputProps,
+      imageFormat:'jpeg',
+      jpegQuality:74,
+      scale,
+      concurrency:1,
+      muted:true,
+      logLevel:'warn',
+      browserExecutable:process.env.REMOTION_BROWSER_EXECUTABLE||undefined,
+      chromiumOptions:{enableMultiProcessOnLinux:false}
+    });
+
+    await new Promise(r=>setTimeout(r,250));
+
+    const pattern=path.join(frameDir,'element-%03d.jpeg');
+    await new Promise((resolve,reject)=>{
+      const args=[
+        '-y',
+        '-framerate',String(composition.fps),
+        '-i',pattern,
+        '-c:v','libx264',
+        '-preset','superfast',
+        '-crf','21',
+        '-pix_fmt','yuv420p',
+        '-movflags','+faststart',
+        outputLocation
+      ];
+      const ff=spawn('ffmpeg',args,{stdio:['ignore','pipe','pipe']});
+      let stderr='';
+      ff.stderr.on('data',d=>{stderr+=d.toString(); if(stderr.length>12000) stderr=stderr.slice(-12000);});
+      ff.on('error',reject);
+      ff.on('close',(code,signal)=>{
+        if(code===0)return resolve();
+        reject(new Error(`Production FFmpeg failed with code ${code}${signal?` (${signal})`:''}: ${stderr.slice(-5000)}`));
+      });
+    });
+  }finally{
+    await fs.rm(frameDir,{recursive:true,force:true}).catch(()=>{});
+  }
+
+  const xf=(req.get('x-forwarded-proto')||'').split(',')[0].trim();
+  const base=`${xf||req.protocol||'https'}://${req.get('host')}`;
+
+  return {
+    ok:true,
+    projectId,
+    qualityVersion,
+    productionBuildVersion,
+    renderTestId,
+    sceneId:sceneManifest.scene_id,
+    outputFileName:fileName,
+    outputUrl:`${base}/outputs/${encodeURIComponent(fileName)}`,
+    renderMs:Date.now()-started,
+    width,
+    height,
+    fps:composition.fps,
+    durationSeconds:composition.durationInFrames/composition.fps,
+    strategy:'production-preview-remotion-2.5d',
+    rendererVersion:'0.11.0'
+  };
+}
+
 function compactError(e){
   const raw=String(e?.message||e||'Unknown error');
   const lines=raw.split('\n').map(s=>s.trim()).filter(Boolean);
@@ -202,6 +303,37 @@ app.get('/test-s01',async(req,res)=>{
     console.error('test-s01 failed',error);
     res.status(500).json({ok:false,error});
   }
+});
+
+app.get('/test-production-s02',async(req,res)=>{
+  try{
+    const result=await renderProductionOne({
+      projectId:'VID-20260923-860786371',
+      qualityVersion:'quality-20260928113113',
+      productionBuildVersion:'prod-20260928120447',
+      renderTestId:'browser-premium',
+      sceneManifest:{scene_id:'S02',start_sec:5.677,end_sec:15.209,duration_sec:9.532},
+      recipes:[],
+      assetTasks:[]
+    },req);
+    res.json(result);
+  }catch(e){
+    const error=compactError(e);
+    console.error('test-production-s02 failed',error);
+    res.status(500).json({ok:false,error});
+  }
+});
+
+app.post('/render-production-scene',(req,res)=>{
+  const job=()=>renderProductionOne(req.body,req);
+  const p=queue.then(job,job);
+  queue=p.catch(()=>{});
+  p.then(x=>res.json(x)).catch((e)=>{
+    const error=compactError(e);
+    const stack=String(e?.stack||'').split('\n').slice(0,8).join('\n');
+    console.error('render-production-scene failed',error,stack);
+    res.status(500).json({ok:false,error,details:stack});
+  });
 });
 
 app.post('/render-scene',(req,res)=>{
