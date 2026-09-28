@@ -1,7 +1,36 @@
 import React from 'react';
 import {Composition} from 'remotion';
 import {Scene} from './scene.jsx';
+import {ProductionScene} from './production-scene.jsx';
 import manifest from './manifest.json';
-export const Root=()=> <Composition id="Scene" component={Scene} durationInFrames={30} fps={30} width={1080} height={1920}
-defaultProps={{scene:manifest.scenes[0]}}
-calculateMetadata={({props})=>({durationInFrames:Math.max(1,Math.ceil((props.scene?.duration_sec||1)*30)),fps:30,width:1080,height:1920})}/>;
+
+export const Root=()=> <>
+  <Composition
+    id="Scene"
+    component={Scene}
+    durationInFrames={30}
+    fps={30}
+    width={1080}
+    height={1920}
+    defaultProps={{scene:manifest.scenes[0]}}
+    calculateMetadata={({props})=>({
+      durationInFrames:Math.max(1,Math.ceil((props.scene?.duration_sec||1)*30)),
+      fps:30,width:1080,height:1920
+    })}
+  />
+  <Composition
+    id="ProductionScene"
+    component={ProductionScene}
+    durationInFrames={286}
+    fps={30}
+    width={1080}
+    height={1920}
+    defaultProps={{package:{
+      sceneManifest:{scene_id:'S02',start_sec:5.677,end_sec:15.209,duration_sec:9.532}
+    }}}
+    calculateMetadata={({props})=>({
+      durationInFrames:Math.max(1,Math.ceil((props.package?.sceneManifest?.duration_sec||9.532)*30)),
+      fps:30,width:1080,height:1920
+    })}
+  />
+</>;
