@@ -7,6 +7,7 @@ import {renderFrames,selectComposition} from '@remotion/renderer';
 import {spawn} from 'node:child_process';
 import multer from 'multer';
 import {createAssemblyHandler} from './assembly.mjs';
+import {createPremiumAssemblyHandler} from './premium-assembly.mjs';
 
 const here=path.dirname(fileURLToPath(import.meta.url));
 const outputs=path.join(here,'outputs');
@@ -87,7 +88,7 @@ app.get('/health',async(req,res)=>{
   res.json({
     ok:true,
     service:'explainer-render-worker',
-    version:'0.12.0',
+    version:'0.13.0',
     renderProfile:'production-preview-540x960+final-assembly',
     strategy:'renderFrames-system-ffmpeg-final-assembly',
     memoryMax,
@@ -276,7 +277,7 @@ async function renderProductionOne(body,req){
     fps:composition.fps,
     durationSeconds:composition.durationInFrames/composition.fps,
     strategy:'production-preview-remotion-2.5d-full-film',
-    rendererVersion:'0.12.0'
+    rendererVersion:'0.13.0'
   };
 }
 
@@ -353,7 +354,7 @@ app.post('/render-production-batch',async(req,res)=>{
     rendered:results.length-failed,
     failed,
     results,
-    rendererVersion:'0.12.0'
+    rendererVersion:'0.13.0'
   });
 });
 
@@ -416,5 +417,7 @@ app.post('/refresh-scenes',async(req,res)=>{
 });
 
 app.post('/assemble-final',upload.single('voice'),createAssemblyHandler({here,outputs}));
+
+app.post('/assemble-premium',upload.fields([{name:'voice',maxCount:1},{name:'scene_S01',maxCount:1},{name:'scene_S02',maxCount:1},{name:'scene_S03',maxCount:1},{name:'scene_S04',maxCount:1},{name:'scene_S05',maxCount:1},{name:'scene_S06',maxCount:1},{name:'scene_S07',maxCount:1},{name:'scene_S08',maxCount:1}]),createPremiumAssemblyHandler({here,outputs}));
 
 app.listen(PORT,'0.0.0.0',()=>console.log(`render-worker listening on :${PORT}`));
