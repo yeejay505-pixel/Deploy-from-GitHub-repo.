@@ -1,7 +1,7 @@
 import React from 'react';
 import {Composition} from 'remotion';
 import {Scene} from './scene.jsx';
-import {ProductionScene} from './production-scene.jsx';
+import {ProductionMaster} from './production-master.jsx';
 import manifest from './manifest.json';
 
 export const Root=()=> <>
@@ -20,7 +20,7 @@ export const Root=()=> <>
   />
   <Composition
     id="ProductionScene"
-    component={ProductionScene}
+    component={ProductionMaster}
     durationInFrames={286}
     fps={30}
     width={1080}
