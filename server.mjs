@@ -87,7 +87,7 @@ app.get('/health',async(req,res)=>{
   res.json({
     ok:true,
     service:'explainer-render-worker',
-    version:'0.11.0',
+    version:'0.11.1',
     renderProfile:'production-preview-540x960+final-assembly',
     strategy:'renderFrames-system-ffmpeg-final-assembly',
     memoryMax,
@@ -275,8 +275,8 @@ async function renderProductionOne(body,req){
     height,
     fps:composition.fps,
     durationSeconds:composition.durationInFrames/composition.fps,
-    strategy:'production-preview-remotion-2.5d',
-    rendererVersion:'0.11.0'
+    strategy:'production-preview-remotion-2.5d-refined',
+    rendererVersion:'0.11.1'
   };
 }
 
