@@ -87,7 +87,7 @@ app.get('/health',async(req,res)=>{
   res.json({
     ok:true,
     service:'explainer-render-worker',
-    version:'0.11.1',
+    version:'0.12.0',
     renderProfile:'production-preview-540x960+final-assembly',
     strategy:'renderFrames-system-ffmpeg-final-assembly',
     memoryMax,
@@ -192,8 +192,8 @@ async function renderProductionOne(body,req){
     assetTasks=[]
   }=body||{};
 
-  if(sceneManifest.scene_id!=='S02'){
-    throw new Error('Production renderer v0.11.0 currently validates S02 first. Received '+String(sceneManifest.scene_id||'missing'));
+  if(!/^S0[1-8]$/.test(String(sceneManifest.scene_id||''))){
+    throw new Error('Production renderer v0.12.0 expects scene IDs S01-S08. Received '+String(sceneManifest.scene_id||'missing'));
   }
 
   const serveUrl=await getBundle();
@@ -275,8 +275,8 @@ async function renderProductionOne(body,req){
     height,
     fps:composition.fps,
     durationSeconds:composition.durationInFrames/composition.fps,
-    strategy:'production-preview-remotion-2.5d-refined',
-    rendererVersion:'0.11.1'
+    strategy:'production-preview-remotion-2.5d-full-film',
+    rendererVersion:'0.12.0'
   };
 }
 
@@ -322,6 +322,39 @@ app.get('/test-production-s02',async(req,res)=>{
     console.error('test-production-s02 failed',error);
     res.status(500).json({ok:false,error});
   }
+});
+
+app.post('/render-production-batch',async(req,res)=>{
+  const body=req.body||{};
+  const packages=Array.isArray(body.packages)?body.packages:[];
+  if(!packages.length) return res.status(400).json({ok:false,error:'Missing packages array'});
+  const results=[];
+  for(const item of packages){
+    try{
+      const result=await renderProductionOne(item,req);
+      results.push(result);
+    }catch(e){
+      const error=compactError(e);
+      console.error('render-production-batch item failed',item?.sceneManifest?.scene_id||'',error);
+      results.push({
+        ok:false,
+        sceneId:item?.sceneManifest?.scene_id||'',
+        projectId:item?.projectId||'',
+        productionBuildVersion:item?.productionBuildVersion||'',
+        error
+      });
+    }
+    await new Promise(r=>setTimeout(r,350));
+  }
+  const failed=results.filter(x=>x.ok!==true).length;
+  res.status(failed?207:200).json({
+    ok:failed===0,
+    total:results.length,
+    rendered:results.length-failed,
+    failed,
+    results,
+    rendererVersion:'0.12.0'
+  });
 });
 
 app.post('/render-production-scene',(req,res)=>{
