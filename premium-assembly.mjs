@@ -47,6 +47,22 @@ function assTime(sec){
   const h=Math.floor(cs/360000),m=Math.floor((cs%360000)/6000),s=Math.floor((cs%6000)/100),x=cs%100;
   return `${h}:${String(m).padStart(2,'0')}:${String(s).padStart(2,'0')}.${String(x).padStart(2,'0')}`;
 }
+function wrapCaptionText(text,maxChars=27){
+  const words=String(text||'').trim().split(/\s+/).filter(Boolean);
+  if(!words.length)return '';
+  if(words.join(' ').length<=maxChars)return words.join(' ');
+
+  let best=1,bestDiff=Infinity;
+  for(let i=1;i<words.length;i++){
+    const a=words.slice(0,i).join(' ');
+    const b=words.slice(i).join(' ');
+    const overflow=Math.max(0,a.length-maxChars)+Math.max(0,b.length-maxChars);
+    const diff=Math.abs(a.length-b.length)+overflow*10;
+    if(diff<bestDiff){best=i;bestDiff=diff;}
+  }
+  return words.slice(0,best).join(' ')+'\n'+words.slice(best).join(' ');
+}
+
 function assEscape(s){
   return String(s).replace(/\\/g,'\\\\').replace(/{/g,'\\{').replace(/}/g,'\\}').replace(/\n/g,'\\N');
 }
@@ -62,16 +78,16 @@ async function writeCaptions(words,outputsBase,outputDir){
     'ScriptType: v4.00+',
     'PlayResX: 540',
     'PlayResY: 960',
-    'WrapStyle: 2',
+    'WrapStyle: 0',
     'ScaledBorderAndShadow: yes',
     '',
     '[V4+ Styles]',
     'Format: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, OutlineColour, BackColour, Bold, Italic, Underline, StrikeOut, ScaleX, ScaleY, Spacing, Angle, BorderStyle, Outline, Shadow, Alignment, MarginL, MarginR, MarginV, Encoding',
-    'Style: Caption,DejaVu Sans,34,&H00F6F3EB,&H00F6F3EB,&H0010141C,&H88070A0E,-1,0,0,0,100,100,0,0,3,1,0,2,44,44,72,1',
+    'Style: Caption,DejaVu Sans,30,&H00F6F3EB,&H00F6F3EB,&H0010141C,&H88070A0E,-1,0,0,0,100,100,0,0,3,1,0,2,58,58,82,1',
     '',
     '[Events]',
     'Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text',
-    ...groups.map(g=>`Dialogue: 0,${assTime(g[0].start)},${assTime(g[g.length-1].end)},Caption,,0,0,0,,${assEscape(g.map(x=>x.word).join(' '))}`)
+    ...groups.map(g=>`Dialogue: 0,${assTime(g[0].start)},${assTime(g[g.length-1].end)},Caption,,0,0,0,,${assEscape(wrapCaptionText(g.map(x=>x.word).join(' ')))}`)
   ].join('\n');
   const assPath=path.join(outputDir,outputsBase+'.ass');
   await fs.writeFile(assPath,ass,'utf8');
