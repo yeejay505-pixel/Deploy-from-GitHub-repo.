@@ -622,6 +622,6 @@ app.post('/refresh-scenes',async(req,res)=>{
 
 app.post('/assemble-final',upload.single('voice'),createAssemblyHandler({here,outputs}));
 
-app.post('/assemble-premium',upload.fields([{name:'voice',maxCount:1},{name:'scene_S01',maxCount:1},{name:'scene_S02',maxCount:1},{name:'scene_S03',maxCount:1},{name:'scene_S04',maxCount:1},{name:'scene_S05',maxCount:1},{name:'scene_S06',maxCount:1},{name:'scene_S07',maxCount:1},{name:'scene_S08',maxCount:1}]),createPremiumAssemblyHandler({here,outputs}));
+app.post('/assemble-premium',upload.any(),createPremiumAssemblyHandler({here,outputs}));
 
 app.listen(PORT,'0.0.0.0',()=>console.log(`render-worker listening on :${PORT}`));
