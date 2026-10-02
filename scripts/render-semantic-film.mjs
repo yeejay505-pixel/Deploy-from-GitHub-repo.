@@ -18,7 +18,7 @@ for(const s of config.scenes){
   s.compiled=compileSceneSpec(s.spec);covered=s.end;
 }
 if(Math.abs(covered-config.duration)>1e-6)throw new Error('Scene schedule must cover the film');
-const words=config.wordTimestamps;let prior=0;
+const words=config.wordTimestamps??[];let prior=0;
 for(const w of words){if(!w.word||w.start<prior||w.end<w.start||w.end>config.duration)throw new Error('Invalid word timing');prior=w.end;}
 // Five-word phrase captions use the original speech timestamps. Never reveal the whole paragraph.
 const captions=[];
@@ -37,7 +37,7 @@ async function drawAt(time){
     let item=cache.get(p.framesDirectory);if(item?.filename!==filename){item={filename,image:await loadImage(filename)};cache.set(p.framesDirectory,item);}
     plates.push({p,image:item.image});
   }
-  drawSemanticScene(ctx,s.compiled,local,{width,height,presentation:s.presentation,captionWords:captions.map(w=>({...w,groupStart:w.groupStart-s.start,groupEnd:w.groupEnd-s.start})),drawPlate:(c)=>{
+  drawSemanticScene(ctx,s.compiled,local,{width,height,presentation:s.presentation,captionWords:words.length?captions.map(w=>({...w,groupStart:w.groupStart-s.start,groupEnd:w.groupEnd-s.start})):undefined,drawPlate:(c)=>{
     for(const {p,image} of plates){const alpha=Math.min(1,(local-p.start)/.2,(p.end-local)/.2)*p.opacity;
       c.save();c.globalAlpha=Math.max(0,alpha);c.beginPath();c.roundRect(p.x,p.y,p.w,p.h,20);c.clip();
       const zoom=1+.035*(local-p.start)/(p.end-p.start),scale=Math.max(p.w/image.width,p.h/image.height)*zoom;
@@ -49,9 +49,10 @@ async function drawAt(time){
 await fs.mkdir(path.dirname(outputPath),{recursive:true});
 if(stillsArg){for(const time of stillsArg.split(',').map(Number)){await drawAt(time);const file=`${outputPath}.${time}s.png`;await fs.writeFile(file,canvas.toBuffer('image/png'));console.log(file);}process.exit(0);}
 const wav=`${outputPath}.sfx.wav`;await fs.writeFile(wav,soundWave({duration:config.duration,cues:config.scenes.flatMap(s=>s.spec.cues.map(c=>({...c,time:c.time+s.start})))}));
-const ff=spawn('ffmpeg',['-y','-v','error','-f','image2pipe','-vcodec','mjpeg','-framerate','30','-i','pipe:0','-i',config.voicePath,'-i',wav,'-filter_complex','[1:a]volume=1[v];[2:a]volume=0.65[s];[v][s]amix=inputs=2:normalize=0:duration=longest,loudnorm=I=-16:TP=-1.2:LRA=11[a]','-map','0:v','-map','[a]','-t',String(config.duration),'-c:v','libx264','-preset','fast','-crf','17','-pix_fmt','yuv420p','-c:a','aac','-b:a','192k','-movflags','+faststart',outputPath],{stdio:['pipe','ignore','pipe']});
+const audioArgs=config.voicePath?['-i',config.voicePath,'-i',wav,'-filter_complex','[1:a]volume=1[v];[2:a]volume=0.65[s];[v][s]amix=inputs=2:normalize=0:duration=longest,loudnorm=I=-16:TP=-1.2:LRA=11[a]','-map','0:v','-map','[a]']:['-i',wav,'-map','0:v','-map','1:a'];
+const ff=spawn('ffmpeg',['-y','-v','error','-f','image2pipe','-vcodec','mjpeg','-framerate','30','-i','pipe:0',...audioArgs,'-t',String(config.duration),'-c:v','libx264','-preset','fast','-crf','17','-pix_fmt','yuv420p','-c:a','aac','-b:a','192k','-movflags','+faststart',outputPath],{stdio:['pipe','ignore','pipe']});
 let stderr='';ff.stderr.on('data',d=>stderr=(stderr+d).slice(-3000));const done=new Promise((resolve,reject)=>{ff.on('error',reject);ff.on('close',code=>code===0?resolve():reject(new Error(stderr)));});done.catch(()=>{});
 try{for(let f=0;f<Math.ceil(config.duration*fps);f++){await drawAt(f/fps);if(!ff.stdin.write(canvas.toBuffer('image/jpeg',94)))await once(ff.stdin,'drain');if(f%300===0)console.log(`Rendered ${f}/${Math.ceil(config.duration*fps)} frames`);}ff.stdin.end();await done;}
 catch(e){ff.stdin.destroy();ff.kill();await fs.rm(outputPath,{force:true});throw e;}
 finally{await fs.rm(wav,{force:true});}
-console.log(JSON.stringify({outputPath,width,height,fps,duration:config.duration,voice:'existing_source',timing:'original_word_timestamps',previewOnly:true,creativeApproval:'pending'}));
+console.log(JSON.stringify({outputPath,width,height,fps,duration:config.duration,voice:config.voicePath?'existing_source':'pending',timing:words.length?'supplied_word_timestamps':'draft',previewOnly:true,releaseEligible:false,creativeApproval:'pending'}));

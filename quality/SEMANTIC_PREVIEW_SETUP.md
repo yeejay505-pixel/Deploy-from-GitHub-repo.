@@ -22,6 +22,12 @@ separate Yeejay AI Vid Engine V 2.0 project and is not transferred to V2.0.
   browser download. The optional Remotion SemanticScene uses the same drawing code.
 - A ten-node, inactive n8n workflow that prepares a structured OpenAI request,
   preserves the supplied script and claims, validates the result, and requests a preview.
+- The offline film renderer also accepts SFX-only reviews when `voicePath` is
+  omitted. Supplied word timestamps are optional in that mode; draft scene text
+  is shown until voice is available. Local project-image plates can accompany
+  shared vector artwork. These plates are not yet part of the strict live schema.
+- `quality/CREATIVE_BASELINE.md` records the accepted light visual direction,
+  source handling and contextual-media rules for further quality tests.
 
 ## Reference flow
 
