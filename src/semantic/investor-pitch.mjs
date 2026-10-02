@@ -52,6 +52,8 @@ function floor(c,x,y,scale,open,occupied=0){
 }
 function crane(c,x,y,t,build){c.save();c.translate(x,y);line(c,0,0,0,-590,P.copper,7);for(let i=0;i<9;i++){line(c,-16,-i*64,16,-(i+1)*64,P.copper,2);line(c,16,-i*64,-16,-(i+1)*64,P.copper,2);}line(c,-70,-575,280,-575,P.copper,7);line(c,0,-640,-60,-575,P.copper,2);line(c,0,-640,260,-575,P.copper,2);const hook=145+Math.sin(t*1.5)*50;line(c,190,-571,190,-571+hook,P.copper,2);poly(c,[[150,-556+hook],[213,-556+hook],[232,-540+hook],[169,-540+hook]],'#CFDBCF',P.green,2);rect(c,-34,-548,67,45,2,P.stone,P.copper);c.restore();}
 function lease(c,x,y,scale,reveal){c.save();c.translate(x,y);c.scale(scale,scale);alpha(c,reveal,()=>{c.save();shadow(c);poly(c,[[-140,-170],[110,-170],[140,-140],[140,190],[-140,190]],P.paper,P.line,2);c.restore();poly(c,[[110,-170],[110,-140],[140,-140]],P.stone,P.line);text(c,'LEASE',-108,-108,33,P.green,700);for(let i=0;i<5;i++)line(c,-107,-66+i*35,106,-66+i*35,P.line,3);c.beginPath();c.moveTo(-80,139);c.bezierCurveTo(-50,90,-35,181,20,120);c.bezierCurveTo(32,170,74,142,104,132);c.strokeStyle=P.copper;c.lineWidth=3;c.stroke();});c.restore();}
+// Reuse exact office/floor geometry in the presenter composition without duplicating financial state.
+export const pitchPrimitives={building,floor,lease,coin,person,tree,crane};
 export function wordTime(s,word,fallback=.4){const w=s.wordTimestamps.find(x=>x.word.toLowerCase()===word.toLowerCase());return w?.start??lerp(s.speechStart,s.speechEnd,fallback);}
 function wordEnd(s,word){return s.wordTimestamps.find(x=>x.word.toLowerCase()===word.toLowerCase())?.end??s.speechEnd;}
 export function createPitchStoryboard(plan){
