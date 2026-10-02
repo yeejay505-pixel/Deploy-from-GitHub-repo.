@@ -1,4 +1,4 @@
-import {SCENE_SCHEMA} from '../src/semantic/scene-schema.mjs';
+import {SCENE_SCHEMA,OBJECT_TYPES} from '../src/semantic/scene-schema.mjs';
 export const PLANNER_INSTRUCTIONS=`You are a visual argument planner for a deterministic animation renderer.
 Return only a semantic-scene-1 specification matching the supplied JSON schema.
 Preserve the user's approved script exactly across beat narration fields, in the same order.
@@ -6,8 +6,9 @@ Do not invent research, sources, numeric facts, assets or unsupported renderer f
 Use only the supplied claims. Mark all hypothetical quantities illustrative with a visible disclaimer.
 Each beat declares cause, visible action and consequence. Use stable object IDs throughout.
 Place objects within x=40..1040 and y=475..1475, allowing room for labels.
-Available objects: platform, shop, cart, person, counter, bar, connector, document, label.
-Metric consumers cart/counter/bar reference one metric ID; do not animate separate inconsistent values.
+Available objects: ${OBJECT_TYPES.join(', ')}.
+Metric consumers cart/counter/bar/ring reference one metric ID; do not animate separate inconsistent values.
+Buildings and landscapes are symbolic diagrams, not invented project architecture. Cards can represent pending evidence without a completion checkmark.
 Available animated properties: x, y, opacity, progress, rotation on objects; value on metrics.
 All fields are required; use an empty string for unused metric and empty arrays when appropriate.
 Keep colour values as six-digit hex codes, opacity/progress in 0..1, and metric values within 0..max.

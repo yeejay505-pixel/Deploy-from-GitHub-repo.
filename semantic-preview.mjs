@@ -9,7 +9,7 @@ import {SCENE_SCHEMA,OBJECT_TYPES,ACTION_PROPERTIES,CUE_TYPES} from './src/seman
 import {drawSemanticScene} from './src/semantic/scene-renderer.mjs';
 
 export function semanticCapabilities(){return {version:'semantic-scene-1',schema:SCENE_SCHEMA,objectTypes:OBJECT_TYPES,properties:ACTION_PROPERTIES,cueTypes:CUE_TYPES,maxDuration:60,previewOnly:true,voiceIncluded:false};}
-function soundWave(spec){
+export function soundWave(spec){
   const rate=48000,samples=new Float32Array(Math.ceil(spec.duration*rate));
   for(const cue of spec.cues){
     const length=cue.type==='resolve'?.6:cue.type==='whoosh'?.4:.08;

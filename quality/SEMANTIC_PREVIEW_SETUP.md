@@ -8,7 +8,7 @@ separate Yeejay AI Vid Engine V 2.0 project and is not transferred to V2.0.
 - Strict JSON schema for objects, shared metrics, timed actions, narration beats,
   source/illustrative claims and action-linked sound cues.
 - An explicit object renderer for platform, shop, cart, person, counter, bar,
-  connector, document and label primitives.
+  connector, document, label, card, building, landscape and ring primitives.
 - Stateful playback from a declared initial state. Tracks cannot overlap or
   teleport to a different value between actions. Charts and counters share metrics.
 - Rejection of unsupported object types, missing references, off-canvas geometry,

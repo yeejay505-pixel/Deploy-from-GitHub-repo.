@@ -2,7 +2,7 @@ const obj=properties=>({type:'object',properties,required:Object.keys(properties
 const str={type:'string'},number={type:'number'};
 const array=items=>({type:'array',items});
 const enumeration=values=>({type:'string',enum:values});
-export const OBJECT_TYPES=['platform','shop','cart','person','counter','bar','connector','document','label'];
+export const OBJECT_TYPES=['platform','shop','cart','person','counter','bar','connector','document','label','card','building','landscape','ring'];
 export const ACTION_PROPERTIES=['x','y','opacity','progress','rotation','value'];
 export const CUE_TYPES=['whoosh','click','arrival','resolve'];
 export const SCENE_SCHEMA=obj({

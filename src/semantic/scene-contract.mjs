@@ -32,14 +32,14 @@ export function validateSceneSpec(spec){
   const objectMap=new Map(spec.objects.map(x=>[x.id,x])),metricMap=new Map(spec.metrics.map(x=>[x.id,x]));
   for(const m of spec.metrics)if(m.max<=0||m.initial<0||m.initial>m.max)fail(`Metric ${m.id} initial/max out of range`);
   for(const o of spec.objects){
-    const minimum={platform:[220,200],shop:[240,200],cart:[220,150],person:[20,40],counter:[140,100],bar:[60,100],connector:[1,0],document:[100,170],label:[80,35]}[o.type];
+    const minimum={platform:[220,200],shop:[240,200],cart:[220,150],person:[20,40],counter:[140,100],bar:[60,100],connector:[1,0],document:[100,170],label:[80,35],card:[180,100],building:[100,120],landscape:[100,120],ring:[200,200]}[o.type];
     if(o.w<minimum[0]||o.h<minimum[1])fail(`Object ${o.id} is too small for ${o.type}`);
     if(!/^#[a-fA-F0-9]{6}$/.test(o.color))fail(`Object ${o.id} requires a hex colour`);
     if(o.opacity<0||o.opacity>1||o.progress<0||o.progress>1)fail(`Object ${o.id} visibility/progress out of range`);
     if(o.x<40||o.x+o.w>1040||o.y<475||o.y+o.h>1475||o.w<=0||o.h<0)fail(`Object ${o.id} is outside the illustration safe area`);
     if(o.label.length>38)fail(`Object ${o.id} label too long`);
     if(o.metric&&!metricMap.has(o.metric))fail(`Object ${o.id} references missing metric ${o.metric}`);
-    if(['cart','counter','bar'].includes(o.type)&&!o.metric)fail(`Object ${o.id} requires a shared metric`);
+    if(['cart','counter','bar','ring'].includes(o.type)&&!o.metric)fail(`Object ${o.id} requires a shared metric`);
     if(o.type==='cart'&&metricMap.get(o.metric)?.max>24)fail('Cart supports at most 24 illustrative people');
   }
   const claimMap=new Map();
