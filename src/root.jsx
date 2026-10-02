@@ -3,8 +3,18 @@ import {Composition} from 'remotion';
 import {Scene} from './scene.jsx';
 import {ProductionMaster} from './production-master.jsx';
 import manifest from './manifest.json';
+import {OfficeBenchmark} from './semantic/office-benchmark.jsx';
 
 export const Root=()=> <>
+  <Composition
+    id="OfficeBenchmark"
+    component={OfficeBenchmark}
+    durationInFrames={600}
+    fps={30}
+    width={1080}
+    height={1920}
+    defaultProps={{showCaptions:true}}
+  />
   <Composition
     id="Scene"
     component={Scene}
