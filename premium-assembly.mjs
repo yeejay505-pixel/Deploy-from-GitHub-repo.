@@ -67,7 +67,7 @@ function assEscape(s){
   return String(s).replace(/\\/g,'\\\\').replace(/{/g,'\\{').replace(/}/g,'\\}').replace(/\n/g,'\\N');
 }
 
-async function writeCaptions(words,outputsBase,outputDir){
+async function writeCaptions(words,outputsBase,outputDir,targetWidth=540,targetHeight=960){
   const groups=captionGroups(words);
   const srt=groups.map((g,i)=>`${i+1}\n${srtTime(g[0].start)} --> ${srtTime(g[g.length-1].end)}\n${g.map(x=>x.word).join(' ')}\n`).join('\n');
   const srtPath=path.join(outputDir,outputsBase+'.srt');
@@ -76,14 +76,14 @@ async function writeCaptions(words,outputsBase,outputDir){
   const ass=[
     '[Script Info]',
     'ScriptType: v4.00+',
-    'PlayResX: 540',
-    'PlayResY: 960',
+    `PlayResX: ${targetWidth}`,
+    `PlayResY: ${targetHeight}`,
     'WrapStyle: 0',
     'ScaledBorderAndShadow: yes',
     '',
     '[V4+ Styles]',
     'Format: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, OutlineColour, BackColour, Bold, Italic, Underline, StrikeOut, ScaleX, ScaleY, Spacing, Angle, BorderStyle, Outline, Shadow, Alignment, MarginL, MarginR, MarginV, Encoding',
-    'Style: Caption,DejaVu Sans,30,&H00F6F3EB,&H00F6F3EB,&H0010141C,&H88070A0E,-1,0,0,0,100,100,0,0,3,1,0,2,58,58,82,1',
+    `Style: Caption,DejaVu Sans,${Math.round(30*(targetWidth/540))},&H00F6F3EB,&H00F6F3EB,&H0010141C,&H88070A0E,-1,0,0,0,100,100,0,0,3,${Math.max(1,Math.round(targetWidth/540))},0,2,${Math.round(58*(targetWidth/540))},${Math.round(58*(targetWidth/540))},${Math.round(82*(targetHeight/960))},1`,
     '',
     '[Events]',
     'Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text',
@@ -187,6 +187,8 @@ export function createPremiumAssemblyHandler({here,outputs}){
       const renderBatchId=String(manifest.renderBatchId||'');
       const assemblyVersion=String(manifest.assemblyVersion||'premium-final-v1');
       const targetDuration=num(manifest.targetDuration,0);
+      const targetWidth=Math.round(num(manifest.targetWidth,540));
+      const targetHeight=Math.round(num(manifest.targetHeight,960));
       const scenes=[...(manifest.scenes||[])].sort((a,b)=>num(a.startSec)-num(b.startSec));
 
       if(!projectId)throw new Error('Missing projectId');
@@ -219,7 +221,7 @@ export function createPremiumAssemblyHandler({here,outputs}){
         const nextStart=i<scenes.length-1?num(scenes[i+1].startSec,end):targetDuration;
         const post=Math.max(0,nextStart-end);
         const dst=path.join(workDir,`${s.sceneId}_pad.mp4`);
-        const vf=`scale=540:960:force_original_aspect_ratio=decrease,pad=540:960:(ow-iw)/2:(oh-ih)/2:color=black,fps=30,tpad=start_mode=clone:start_duration=${pre.toFixed(3)}:stop_mode=clone:stop_duration=${post.toFixed(3)}`;
+        const vf=`scale=${targetWidth}:${targetHeight}:force_original_aspect_ratio=decrease,pad=${targetWidth}:${targetHeight}:(ow-iw)/2:(oh-ih)/2:color=black,fps=30,tpad=start_mode=clone:start_duration=${pre.toFixed(3)}:stop_mode=clone:stop_duration=${post.toFixed(3)}`;
         await run('ffmpeg',['-y','-i',src,'-vf',vf,'-an','-c:v','libx264','-preset','superfast','-crf','21','-pix_fmt','yuv420p','-r','30','-movflags','+faststart',dst]);
         padded.push(dst);
       }
@@ -234,7 +236,7 @@ export function createPremiumAssemblyHandler({here,outputs}){
       const music=await synthMusic(targetDuration,workDir);
 
       const baseName=`${safe(projectId)}_${safe(assemblyVersion)}`;
-      const captions=await writeCaptions(manifest.wordTimestamps||[],baseName,outputs);
+      const captions=await writeCaptions(manifest.wordTimestamps||[],baseName,outputs,targetWidth,targetHeight);
       const finalFileName=baseName+'.mp4';
       const finalPath=path.join(outputs,finalFileName);
 
@@ -263,7 +265,7 @@ export function createPremiumAssemblyHandler({here,outputs}){
         {checkName:'duration',result:durationDelta<=.35?'pass':'fail',measuredValue:duration.toFixed(3),targetValue:targetDuration.toFixed(3),tolerance:'±0.35s',notes:`Delta ${durationDelta.toFixed(3)}s`},
         {checkName:'video_stream',result:video?.codec_name==='h264'?'pass':'fail',measuredValue:video?.codec_name||'missing',targetValue:'h264',tolerance:'exact',notes:'Premium final MP4 video codec.'},
         {checkName:'audio_stream',result:audio?.codec_name==='aac'?'pass':'fail',measuredValue:audio?.codec_name||'missing',targetValue:'aac',tolerance:'exact',notes:'Premium final MP4 audio codec.'},
-        {checkName:'frame_size',result:(video?.width===540&&video?.height===960)?'pass':'fail',measuredValue:`${video?.width||0}x${video?.height||0}`,targetValue:'540x960',tolerance:'preview profile',notes:'Master coordinate design remains 1080x1920.'},
+        {checkName:'frame_size',result:(video?.width===targetWidth&&video?.height===targetHeight)?'pass':'fail',measuredValue:`${video?.width||0}x${video?.height||0}`,targetValue:`${targetWidth}x${targetHeight}`,tolerance:'exact profile',notes:targetWidth===1080?'Native master profile.':'Preview profile.'},
         {checkName:'file_size',result:size>1000000?'pass':'warn',measuredValue:String(size),targetValue:'>1000000',tolerance:'bytes',notes:'Sanity check for assembled premium output.'},
         {checkName:'sfx_events',result:sfx.count>=12?'pass':'warn',measuredValue:String(sfx.count),targetValue:'17 planned',tolerance:'editorial',notes:'Designed procedural SFX cues.'},
         {checkName:'music_bed',result:'pass',measuredValue:'editorial electronic bed generated',targetValue:'present',tolerance:'present',notes:'Low-level score under narration.'},
@@ -283,7 +285,7 @@ export function createPremiumAssemblyHandler({here,outputs}){
         durationSeconds:duration,width:video?.width||0,height:video?.height||0,
         sceneCount:scenes.length,sfxCount:sfx.count,captionCount:captions.groups.length,
         lufs:meter.lufs,truePeak:meter.peak,qaStatus,qa,assemblyMs:Date.now()-started,
-        strategy:'premium-durable-inputs-voice-sfx-music-burned-captions'
+        strategy:targetWidth===1080?'premium-native-1080x1920-durable-inputs':'premium-preview-durable-inputs-voice-sfx-music-burned-captions'
       });
     }catch(e){
       const raw=String(e?.message||e||'Unknown premium assembly error');
