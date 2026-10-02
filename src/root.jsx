@@ -4,8 +4,20 @@ import {Scene} from './scene.jsx';
 import {ProductionMaster} from './production-master.jsx';
 import manifest from './manifest.json';
 import {OfficeBenchmark} from './semantic/office-benchmark.jsx';
+import {SemanticScene} from './semantic/semantic-scene.jsx';
+import semanticExample from '../examples/platform-dependency.json';
 
 export const Root=()=> <>
+  <Composition
+    id="SemanticScene"
+    component={SemanticScene}
+    durationInFrames={600}
+    fps={30}
+    width={1080}
+    height={1920}
+    defaultProps={{spec:semanticExample}}
+    calculateMetadata={({props})=>({durationInFrames:Math.ceil(props.spec.duration*30),fps:30,width:1080,height:1920})}
+  />
   <Composition
     id="OfficeBenchmark"
     component={OfficeBenchmark}

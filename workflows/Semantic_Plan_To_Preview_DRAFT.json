@@ -1,0 +1,287 @@
+{
+  "name": "Explainer — Semantic Plan To Preview — DRAFT",
+  "active": false,
+  "nodes": [
+    {
+      "id": "manual-test",
+      "name": "Manual Test",
+      "type": "n8n-nodes-base.manualTrigger",
+      "typeVersion": 1,
+      "position": [
+        0,
+        0
+      ],
+      "parameters": {}
+    },
+    {
+      "id": "configure-preview",
+      "name": "Configure Preview",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        240,
+        0
+      ],
+      "parameters": {
+        "jsCode": "// Select your existing model and renderer host. No API keys belong in this node.\nreturn [{json:{\n  \"model\": \"REPLACE_WITH_YOUR_MODEL_ID\",\n  \"renderer_base_url\": \"https://REPLACE_WITH_RENDERER_HOST\",\n  \"script\": \"A platform can bring customers to your business. At first, that looks like growth. But watch what happens when that support disappears. Customers fall away. Growth matters. So does what keeps it growing.\",\n  \"claims\": [\n    {\n      \"id\": \"model-01\",\n      \"text\": \"Customer quantities illustrate dependency; they are not observed market data.\",\n      \"status\": \"illustrative\",\n      \"source\": \"Conceptual example\"\n    }\n  ],\n  \"duration\": 20,\n  \"width\": 1080\n}}];"
+      }
+    },
+    {
+      "id": "check-configuration",
+      "name": "Check Configuration",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        480,
+        0
+      ],
+      "parameters": {
+        "jsCode": "const c=$input.first().json;if(!c.model||c.model.includes('REPLACE')||!c.renderer_base_url.startsWith('https://')||c.renderer_base_url.includes('REPLACE'))throw new Error('Configure the existing OpenAI model ID and HTTPS renderer host first.');return [{json:c}];"
+      }
+    },
+    {
+      "id": "get-renderer-capabilities",
+      "name": "Get Renderer Capabilities",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        720,
+        0
+      ],
+      "parameters": {
+        "method": "GET",
+        "url": "={{ $json.renderer_base_url + '/semantic-capabilities' }}",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "options": {
+          "timeout": 180000
+        }
+      }
+    },
+    {
+      "id": "build-structured-plan-request",
+      "name": "Build Structured Plan Request",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        960,
+        0
+      ],
+      "parameters": {
+        "jsCode": "const c=$items('Configure Preview')[0].json;const caps=$input.first().json;if(caps.version!=='semantic-scene-1')throw new Error('Renderer capability version mismatch.');const SCENE_SCHEMA=caps.schema;const PLANNER_INSTRUCTIONS=\"You are a visual argument planner for a deterministic animation renderer.\\nReturn only a semantic-scene-1 specification matching the supplied JSON schema.\\nPreserve the user's approved script exactly across beat narration fields, in the same order.\\nDo not invent research, sources, numeric facts, assets or unsupported renderer functions.\\nUse only the supplied claims. Mark all hypothetical quantities illustrative with a visible disclaimer.\\nEach beat declares cause, visible action and consequence. Use stable object IDs throughout.\\nPlace objects within x=40..1040 and y=475..1475, allowing room for labels.\\nAvailable objects: platform, shop, cart, person, counter, bar, connector, document, label.\\nMetric consumers cart/counter/bar reference one metric ID; do not animate separate inconsistent values.\\nAvailable animated properties: x, y, opacity, progress, rotation on objects; value on metrics.\\nAll fields are required; use an empty string for unused metric and empty arrays when appropriate.\\nKeep colour values as six-digit hex codes, opacity/progress in 0..1, and metric values within 0..max.\\nAction intervals for one target/property never overlap. Each action starts from its preceding state.\\nBeats cover time 0 through duration without gaps or overlap. Intentional final holds use mode=hold.\\nTimingBasis must be draft until measured narration timestamps are supplied. Keep duration 2..60 seconds.\\nDo not include executable code or URLs. Unsupported visual ideas require a simpler valid explanation;\\nnever invent a new object type. Leave the final meaningful composition visible.\";const buildPlanRequest=function buildPlanRequest({script,claims,duration,model}){\n  if(!model||/REPLACE|SET_YOUR/.test(model))throw new Error('Choose the existing OpenAI model ID before running.');\n  if(typeof script!=='string'||!script.trim()||script.length>12000)throw new Error('Supply an approved script (1–12,000 characters).');\n  if(!Array.isArray(claims)||!claims.length)throw new Error('Supply the upstream claims ledger or an explicitly illustrative claim.');\n  const ids=new Set();for(const c of claims){if(!c.id||ids.has(c.id)||!c.text||!['sourced','illustrative'].includes(c.status)||typeof c.source!=='string'||c.status==='sourced'&&!c.source.trim())throw new Error('Resolve incomplete or unsupported claims before planning.');ids.add(c.id);}\n  if(!Number.isFinite(duration)||duration<2||duration>60)throw new Error('Duration must be 2–60 seconds.');\n  return {model,store:false,input:[{role:'system',content:PLANNER_INSTRUCTIONS},{role:'user',content:JSON.stringify({script,claims,duration})}],text:{format:{type:'json_schema',name:'semantic_scene',strict:true,schema:SCENE_SCHEMA}}};\n};return [{json:{request:buildPlanRequest(c)}}];"
+      }
+    },
+    {
+      "id": "openai-plan-scene",
+      "name": "OpenAI Plan Scene",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        1200,
+        0
+      ],
+      "parameters": {
+        "method": "POST",
+        "url": "https://api.openai.com/v1/responses",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "openAiApi",
+        "options": {
+          "timeout": 180000
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify($json.request) }}"
+      }
+    },
+    {
+      "id": "preserve-script-and-claims",
+      "name": "Preserve Script And Claims",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1440,
+        0
+      ],
+      "parameters": {
+        "jsCode": "const c=$items('Configure Preview')[0].json;const parsePlanResponse=function parsePlanResponse(response,originalScript,originalClaims){\n  if(response?.status!=='completed')throw new Error(`Planner response incomplete: ${response?.status??'missing status'}`);\n  const parts=(response.output||[]).flatMap(x=>x.content||[]);\n  if(parts.some(x=>x.type==='refusal'))throw new Error('Planner declined the request.');\n  const raw=parts.filter(x=>x.type==='output_text').map(x=>x.text).join('');\n  if(!raw)throw new Error('Planner response has no specification.');\n  const spec=JSON.parse(raw),normalize=s=>s.trim().replace(/\\s+/g,' ');\n  if(normalize(spec.beats.map(b=>b.narration).join(' '))!==normalize(originalScript))throw new Error('Planner changed the approved script.');\n  if(!Array.isArray(originalClaims)||!originalClaims.length)throw new Error('Missing upstream claim ledger.');\n  const ledger=new Map(originalClaims.map(c=>[c.id,c]));\n  for(const claim of spec.claims){const source=ledger.get(claim.id);if(!source||['text','status','source'].some(k=>claim[k]!==source[k]))throw new Error(`Planner invented or changed claim ${claim.id}`);}\n  return spec;\n};const spec=parsePlanResponse($input.first().json,c.script,c.claims);return [{json:{spec,width:c.width}}];"
+      }
+    },
+    {
+      "id": "validate-scene-specification",
+      "name": "Validate Scene Specification",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        1680,
+        0
+      ],
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $items('Configure Preview')[0].json.renderer_base_url + '/validate-semantic-scene' }}",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "options": {
+          "timeout": 180000
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({spec:$json.spec}) }}"
+      }
+    },
+    {
+      "id": "render-semantic-preview",
+      "name": "Render Semantic Preview",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        1920,
+        0
+      ],
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $items('Configure Preview')[0].json.renderer_base_url + '/render-semantic-preview' }}",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "options": {
+          "timeout": 180000
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify($items('Preserve Script And Claims')[0].json) }}"
+      }
+    },
+    {
+      "id": "preview-review-required",
+      "name": "Preview Review Required",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        2160,
+        0
+      ],
+      "parameters": {
+        "jsCode": "const r=$input.first().json;if(r.ok!==true||r.previewOnly!==true||r.voicePending!==true)throw new Error('Unexpected preview result');return [{json:{...r,status:'preview_ready_voice_and_human_review_pending',next:'Review the motion, add approved voice and align timestamps before full production.'}}];"
+      }
+    },
+    {
+      "id": "setup-notes",
+      "name": "Setup Notes",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [
+        380,
+        -400
+      ],
+      "parameters": {
+        "height": 310,
+        "width": 1000,
+        "content": "## Draft: existing engine semantic preview\nImport as a new, inactive workflow. This does not edit existing workflows or the separate V2.0 project.\n\n1. Deploy the reviewed draft preview backend first.\n2. Set renderer_base_url and your existing OpenAI model ID in Configure Preview.\n3. Choose your existing OpenAI credential on OpenAI Plan Scene.\n4. Choose an HTTP Header Auth credential on the three renderer HTTP nodes: Authorization = Bearer <RENDER_TOKEN>. Keep the secret in credentials.\n5. Run manually. Validation errors stop the workflow before rendering.\n\nVoice generation, word alignment, creative approval, Drive/Sheets logging and automatic intake are pending. No messages are sent."
+      }
+    }
+  ],
+  "connections": {
+    "Manual Test": {
+      "main": [
+        [
+          {
+            "node": "Configure Preview",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Configure Preview": {
+      "main": [
+        [
+          {
+            "node": "Check Configuration",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Check Configuration": {
+      "main": [
+        [
+          {
+            "node": "Get Renderer Capabilities",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Get Renderer Capabilities": {
+      "main": [
+        [
+          {
+            "node": "Build Structured Plan Request",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Build Structured Plan Request": {
+      "main": [
+        [
+          {
+            "node": "OpenAI Plan Scene",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "OpenAI Plan Scene": {
+      "main": [
+        [
+          {
+            "node": "Preserve Script And Claims",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Preserve Script And Claims": {
+      "main": [
+        [
+          {
+            "node": "Validate Scene Specification",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Validate Scene Specification": {
+      "main": [
+        [
+          {
+            "node": "Render Semantic Preview",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Render Semantic Preview": {
+      "main": [
+        [
+          {
+            "node": "Preview Review Required",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "pinData": {}
+}

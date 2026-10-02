@@ -8,6 +8,7 @@ import {spawn} from 'node:child_process';
 import multer from 'multer';
 import {createAssemblyHandler} from './assembly.mjs';
 import {createPremiumAssemblyHandler} from './premium-assembly.mjs';
+import {createSemanticRoutes} from './semantic-preview.mjs';
 
 const here=path.dirname(fileURLToPath(import.meta.url));
 const outputs=path.join(here,'outputs');
@@ -83,6 +84,11 @@ app.use((req,res,next)=>{
   if(!TOKEN||req.path==='/health')return next();
   if((req.get('authorization')||'')!==`Bearer ${TOKEN}`) return res.status(401).json({ok:false,error:'Unauthorized'});
   next();
+});
+
+createSemanticRoutes({
+  app,outputs,token:TOKEN,baseUrl:publicBase,
+  enqueue:job=>{const p=queue.then(job,job);queue=p.catch(()=>{});return p;}
 });
 
 app.get('/health',async(req,res)=>{
