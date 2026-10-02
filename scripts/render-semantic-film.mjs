@@ -42,7 +42,7 @@ async function drawAt(time){
       c.save();c.globalAlpha=Math.max(0,alpha);c.beginPath();c.roundRect(p.x,p.y,p.w,p.h,20);c.clip();
       const zoom=1+.035*(local-p.start)/(p.end-p.start),scale=Math.max(p.w/image.width,p.h/image.height)*zoom;
       const dw=image.width*scale,dh=image.height*scale;c.drawImage(image,p.x+(p.w-dw)/2,p.y+(p.h-dh)/2,dw,dh);c.restore();
-      c.save();c.strokeStyle='#344552';c.lineWidth=2;c.beginPath();c.roundRect(p.x,p.y,p.w,p.h,20);c.stroke();c.restore();
+      c.save();c.strokeStyle=s.presentation?.theme==='dark'?'#344552':'#DCE6DC';c.lineWidth=2;c.beginPath();c.roundRect(p.x,p.y,p.w,p.h,20);c.stroke();c.restore();
     }
   }});
 }

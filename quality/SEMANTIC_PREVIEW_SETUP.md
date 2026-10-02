@@ -9,6 +9,11 @@ separate Yeejay AI Vid Engine V 2.0 project and is not transferred to V2.0.
   source/illustrative claims and action-linked sound cues.
 - An explicit object renderer for platform, shop, cart, person, counter, bar,
   connector, document, label, card, building, landscape and ring primitives.
+- Review visuals now default to a light white/sage/stone style with illustrated
+  evidence icons, soft surfaces and dimensional symbolic building/landscape graphics.
+  `presentation.theme: "dark"` retains the prior style for an explicit request.
+  Offline scene `presentation.icons` maps stable object IDs to supported icon artwork;
+  this changes appearance without changing claims, metrics, actions or timing.
 - Stateful playback from a declared initial state. Tracks cannot overlap or
   teleport to a different value between actions. Charts and counters share metrics.
 - Rejection of unsupported object types, missing references, off-canvas geometry,

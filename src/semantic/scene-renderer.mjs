@@ -1,4 +1,5 @@
 import {sampleScene} from './scene-contract.mjs';
+import {drawEditorialObject,LIGHT_PALETTE} from './editorial-graphics.mjs';
 const C={bg:'#10151b',ink:'#f3f2eb',muted:'#8c99a6',line:'#344552'};
 function rr(ctx,x,y,w,h,r,fill,stroke,width=2){ctx.beginPath();ctx.roundRect(x,y,w,h,r);if(fill){ctx.fillStyle=fill;ctx.fill();}if(stroke){ctx.strokeStyle=stroke;ctx.lineWidth=width;ctx.stroke();}}
 function text(ctx,s,x,y,size=28,color=C.ink,weight=400,align='left'){ctx.font=`${weight} ${size}px "DejaVu Sans",Arial,sans-serif`;ctx.textAlign=align;ctx.textBaseline='alphabetic';ctx.fillStyle=color;ctx.fillText(s,x,y);}
@@ -61,17 +62,18 @@ function drawObject(ctx,o,metric,t){
   ctx.restore();
 }
 export function drawSemanticScene(ctx,compiled,time,{width=1080,height=1920,presentation={},drawPlate,captionWords}={}){
+  const light=presentation.theme!=='dark',C=light?LIGHT_PALETTE:{bg:'#10151b',ink:'#f3f2eb',muted:'#8c99a6',line:'#344552'},accent=light?LIGHT_PALETTE.green:'#9DDDAC';
   const sampled=sampleScene(compiled,time),{scene}=compiled;ctx.save();ctx.scale(width/1080,height/1920);
   ctx.fillStyle=C.bg;ctx.fillRect(0,0,1080,1920);ctx.lineCap='round';ctx.lineJoin='round';
-  text(ctx,presentation.brand||'YEEJAY / ANIMATED EXPLAINER',80,123,18,C.muted,500);text(ctx,presentation.chapter||'',1000,123,16,'#9DDDAC',400,'right');line(ctx,80,163,1000,163,C.line,1);
-  if(presentation.kicker)text(ctx,presentation.kicker,80,211,20,'#9DDDAC',500);
+  text(ctx,presentation.brand||'YEEJAY / ANIMATED EXPLAINER',80,123,18,C.muted,500);text(ctx,presentation.chapter||'',1000,123,16,accent,400,'right');line(ctx,80,163,1000,163,C.line,1);
+  if(presentation.kicker)text(ctx,presentation.kicker,80,211,20,accent,500);
   let headlineSize=70,lines=wrap(ctx,sampled.beat.headline,920,headlineSize,700);
   while(lines.length>2&&headlineSize>44){headlineSize-=2;lines=wrap(ctx,sampled.beat.headline,920,headlineSize,700);}
   if(lines.length>2)throw new Error('Headline does not fit: reduce text density.');
-  const headAlpha=Math.min(1,(time-sampled.beat.start)/.2);ctx.save();ctx.globalAlpha=headAlpha;lines.forEach((s,i)=>text(ctx,s,80,292+i*85+(1-headAlpha)*12,headlineSize,i?'#9DDDAC':C.ink,700));ctx.restore();
-  ctx.fillStyle=C.line;ctx.globalAlpha=.27;for(let x=80;x<1010;x+=40)for(let y=480;y<1480;y+=40)ctx.fillRect(x,y,1.5,1.5);ctx.globalAlpha=1;
+  const headAlpha=Math.min(1,(time-sampled.beat.start)/.2);ctx.save();ctx.globalAlpha=headAlpha;lines.forEach((s,i)=>text(ctx,s,80,292+i*85+(1-headAlpha)*12,headlineSize,i?accent:C.ink,700));ctx.restore();
+  if(light){ctx.fillStyle='#F8FAF6';ctx.beginPath();ctx.roundRect(55,475,970,1020,32);ctx.fill();}else{ctx.fillStyle=C.line;ctx.globalAlpha=.27;for(let x=80;x<1010;x+=40)for(let y=480;y<1480;y+=40)ctx.fillRect(x,y,1.5,1.5);ctx.globalAlpha=1;}
   if(drawPlate)drawPlate(ctx,time);
-  for(const o of sampled.objects.values())drawObject(ctx,o,o.metric?sampled.metrics.get(o.metric):null,time);
+  for(const o of sampled.objects.values())if(light)drawEditorialObject(ctx,o,o.metric?sampled.metrics.get(o.metric):null,time,presentation);else drawObject(ctx,o,o.metric?sampled.metrics.get(o.metric):null,time);
   const caption=captionWords?captionWords.filter(w=>time>=w.groupStart&&time<w.groupEnd).map(w=>w.word).join(' '):sampled.beat.narration;
   const caps=wrap(ctx,caption,860,captionWords?38:32);caps.slice(0,3).forEach((s,i)=>text(ctx,s,540,1570+i*46,captionWords?38:32,C.ink,500,'center'));
   line(ctx,80,1734,1000,1734,C.line,1);const disclaimer=wrap(ctx,presentation.disclaimer||scene.disclaimer||'DRAFT TIMING / VOICE ALIGNMENT PENDING',920,18);disclaimer.slice(0,2).forEach((s,i)=>text(ctx,s,80,1780+i*28,18,C.muted,400));
