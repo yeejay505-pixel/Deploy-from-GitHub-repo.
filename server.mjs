@@ -88,8 +88,8 @@ app.get('/health',async(req,res)=>{
   res.json({
     ok:true,
     service:'explainer-render-worker',
-    version:'0.13.1',
-    renderProfile:'production-preview-540x960+final-assembly',
+    version:'0.14.0',
+    renderProfile:'production-preview-540x960+native-master-1080x1920+final-assembly',
     strategy:'renderFrames-system-ffmpeg-final-assembly',
     memoryMax,
     heapMb:Math.round(process.memoryUsage().heapUsed/1024/1024)
@@ -188,6 +188,7 @@ async function renderProductionOne(body,req){
     qualityVersion,
     productionBuildVersion,
     renderTestId='premium-test',
+    renderProfile='preview',
     sceneManifest={},
     recipes=[],
     assetTasks=[]
@@ -208,7 +209,8 @@ async function renderProductionOne(body,req){
   const outputLocation=path.join(outputs,fileName);
   const frameDir=path.join(frameRoot,`${safeProject}_${safeBuild}_${sceneManifest.scene_id}_${safeTest}`);
 
-  const scale=0.5;
+  const normalizedProfile=String(renderProfile||'preview').toLowerCase();
+  const scale=(normalizedProfile==='master1080'||normalizedProfile==='native'||normalizedProfile==='full')?1:0.5;
   const width=Math.round(composition.width*scale);
   const height=Math.round(composition.height*scale);
 
@@ -222,7 +224,7 @@ async function renderProductionOne(body,req){
       outputDir:frameDir,
       inputProps,
       imageFormat:'jpeg',
-      jpegQuality:74,
+      jpegQuality:scale===1?82:74,
       scale,
       concurrency:1,
       muted:true,
@@ -241,7 +243,7 @@ async function renderProductionOne(body,req){
         '-i',pattern,
         '-c:v','libx264',
         '-preset','superfast',
-        '-crf','21',
+        '-crf',scale===1?'18':'21',
         '-pix_fmt','yuv420p',
         '-movflags','+faststart',
         outputLocation
@@ -276,8 +278,9 @@ async function renderProductionOne(body,req){
     height,
     fps:composition.fps,
     durationSeconds:composition.durationInFrames/composition.fps,
-    strategy:'production-preview-remotion-2.5d-full-film',
-    rendererVersion:'0.13.0'
+    strategy:scale===1?'production-native-1080x1920-remotion-2.5d-full-film':'production-preview-remotion-2.5d-full-film',
+    renderProfile:normalizedProfile,
+    rendererVersion:'0.14.0'
   };
 }
 
@@ -354,7 +357,7 @@ app.post('/render-production-batch',async(req,res)=>{
     rendered:results.length-failed,
     failed,
     results,
-    rendererVersion:'0.13.0'
+    rendererVersion:'0.14.0'
   });
 });
 
