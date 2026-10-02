@@ -13,9 +13,11 @@ const here=path.dirname(fileURLToPath(import.meta.url));
 const outputs=path.join(here,'outputs');
 const uploads=path.join(here,'uploads');
 const frameRoot=path.join(here,'frame-cache');
+const stagedRoot=path.join(here,'staged-media');
 await fs.mkdir(outputs,{recursive:true});
 await fs.mkdir(uploads,{recursive:true});
 await fs.mkdir(frameRoot,{recursive:true});
+await fs.mkdir(stagedRoot,{recursive:true});
 
 const app=express();
 app.set('trust proxy',1);
@@ -73,8 +75,9 @@ function normalizeScene(raw={}){
   return {...raw,start_sec:start,end_sec:end,duration_sec:duration,components};
 }
 
-app.use(express.json({limit:'8mb'}));
+app.use(express.json({limit:'12mb'}));
 app.use('/outputs',express.static(outputs));
+app.use('/render-assets',express.static(stagedRoot));
 
 app.use((req,res,next)=>{
   if(!TOKEN||req.path==='/health')return next();
@@ -88,9 +91,9 @@ app.get('/health',async(req,res)=>{
   res.json({
     ok:true,
     service:'explainer-render-worker',
-    version:'0.14.0',
-    renderProfile:'production-preview-540x960+native-master-1080x1920+final-assembly',
-    strategy:'renderFrames-system-ffmpeg-final-assembly',
+    version:'0.15.0',
+    renderProfile:'universal-media-aware-1080x1920+preview+final-assembly',
+    strategy:'staged-media+renderFrames-system-ffmpeg+sequential-scene-rendering',
     memoryMax,
     heapMb:Math.round(process.memoryUsage().heapUsed/1024/1024)
   });
@@ -194,8 +197,8 @@ async function renderProductionOne(body,req){
     assetTasks=[]
   }=body||{};
 
-  if(!/^S0[1-8]$/.test(String(sceneManifest.scene_id||''))){
-    throw new Error('Production renderer v0.12.0 expects scene IDs S01-S08. Received '+String(sceneManifest.scene_id||'missing'));
+  if(!String(sceneManifest.scene_id||'').trim()){
+    throw new Error('Missing sceneManifest.scene_id');
   }
 
   const serveUrl=await getBundle();
@@ -280,7 +283,7 @@ async function renderProductionOne(body,req){
     durationSeconds:composition.durationInFrames/composition.fps,
     strategy:scale===1?'production-native-1080x1920-remotion-2.5d-full-film':'production-preview-remotion-2.5d-full-film',
     renderProfile:normalizedProfile,
-    rendererVersion:'0.14.0'
+    rendererVersion:'0.15.0'
   };
 }
 
@@ -290,6 +293,204 @@ function compactError(e){
   const tail=lines.slice(-18).join(' | ');
   return tail.slice(-3000);
 }
+
+function publicBase(req){
+  const xf=(req.get('x-forwarded-proto')||'').split(',')[0].trim();
+  return `${xf||req.protocol||'https'}://${req.get('host')}`;
+}
+
+function safePart(v){
+  return String(v??'').replace(/[^A-Za-z0-9_.-]/g,'_').slice(0,180);
+}
+
+function taskDriveId(task={}){
+  if(task.drive_file_id) return String(task.drive_file_id);
+  const spec=task.build_spec||{};
+  const params=Array.isArray(spec.parameters)?spec.parameters:[];
+  return String(params.find(x=>x?.name==='drive_file_id')?.value||'');
+}
+
+function enrichStagedAssets(assetTasks=[],stagedMedia=[]){
+  const byDrive=new Map((stagedMedia||[]).map(x=>[String(x.drive_file_id||''),String(x.staged_local_url||x.staged_url||'')]));
+  return (assetTasks||[]).map(task=>{
+    const id=taskDriveId(task);
+    const staged=byDrive.get(id)||String(task.staged_url||'');
+    return {...task,staged_url:staged};
+  });
+}
+
+async function renderUniversalOne(body,req){
+  const started=Date.now();
+  const {
+    projectId,
+    qualityVersion,
+    productionBuildVersion,
+    renderBatchId='universal-render',
+    renderProfile='native',
+    sceneManifest={},
+    recipes=[],
+    assetTasks=[],
+    stagedMedia=[]
+  }=body||{};
+
+  if(!String(sceneManifest.scene_id||'').trim()) throw new Error('Missing sceneManifest.scene_id');
+
+  const enrichedTasks=enrichStagedAssets(assetTasks,stagedMedia);
+  const missing=enrichedTasks.filter(x=>String(x.source_mode||'')==='google_drive_source_media'&&!String(x.staged_url||'').trim());
+  if(missing.length){
+    throw new Error('Missing staged media for '+missing.map(x=>x.asset_id||taskDriveId(x)).join(', '));
+  }
+
+  const serveUrl=await getBundle();
+  const inputProps={package:{sceneManifest,recipes,assetTasks:enrichedTasks,qualityVersion,productionBuildVersion}};
+  const composition=await selectComposition({serveUrl,id:'ProductionScene',inputProps});
+
+  const safeProject=safePart(projectId||'project');
+  const safeBuild=safePart(productionBuildVersion||'prod');
+  const safeBatch=safePart(renderBatchId||'batch');
+  const sceneId=safePart(sceneManifest.scene_id);
+  const fileName=`${safeProject}_${safeBuild}_${sceneId}_${safeBatch}.mp4`;
+  const outputLocation=path.join(outputs,fileName);
+  const frameDir=path.join(frameRoot,`${safeProject}_${safeBuild}_${sceneId}_${safeBatch}`);
+
+  const normalizedProfile=String(renderProfile||'native').toLowerCase();
+  const scale=(normalizedProfile==='preview'||normalizedProfile==='540'||normalizedProfile==='half')?0.5:1;
+  const width=Math.round(composition.width*scale);
+  const height=Math.round(composition.height*scale);
+
+  await fs.rm(frameDir,{recursive:true,force:true});
+  await fs.mkdir(frameDir,{recursive:true});
+
+  try{
+    await renderFrames({
+      composition,
+      serveUrl,
+      outputDir:frameDir,
+      inputProps,
+      imageFormat:'jpeg',
+      jpegQuality:scale===1?82:74,
+      scale,
+      concurrency:1,
+      muted:true,
+      logLevel:'warn',
+      browserExecutable:process.env.REMOTION_BROWSER_EXECUTABLE||undefined,
+      chromiumOptions:{enableMultiProcessOnLinux:false}
+    });
+
+    await new Promise(r=>setTimeout(r,250));
+
+    const pattern=path.join(frameDir,'element-%03d.jpeg');
+    await new Promise((resolve,reject)=>{
+      const args=[
+        '-y','-framerate',String(composition.fps),'-i',pattern,
+        '-c:v','libx264','-preset','superfast','-crf',scale===1?'18':'21',
+        '-pix_fmt','yuv420p','-movflags','+faststart',outputLocation
+      ];
+      const ff=spawn('ffmpeg',args,{stdio:['ignore','pipe','pipe']});
+      let stderr='';
+      ff.stderr.on('data',d=>{stderr+=d.toString();if(stderr.length>12000)stderr=stderr.slice(-12000);});
+      ff.on('error',reject);
+      ff.on('close',(code,signal)=>{
+        if(code===0)return resolve();
+        reject(new Error(`Universal FFmpeg failed with code ${code}${signal?` (${signal})`:''}: ${stderr.slice(-5000)}`));
+      });
+    });
+  }finally{
+    await fs.rm(frameDir,{recursive:true,force:true}).catch(()=>{});
+  }
+
+  return {
+    ok:true,
+    projectId,
+    qualityVersion,
+    productionBuildVersion,
+    renderBatchId,
+    sceneId:sceneManifest.scene_id,
+    outputFileName:fileName,
+    outputUrl:`${publicBase(req)}/outputs/${encodeURIComponent(fileName)}`,
+    renderMs:Date.now()-started,
+    width,height,fps:composition.fps,
+    durationSeconds:composition.durationInFrames/composition.fps,
+    strategy:scale===1?'universal-native-1080x1920-media-aware':'universal-preview-540x960-media-aware',
+    renderProfile:normalizedProfile,
+    rendererVersion:'0.15.0'
+  };
+}
+
+app.post('/stage-media',upload.single('media'),async(req,res)=>{
+  try{
+    if(!req.file) return res.status(400).json({ok:false,error:'Missing multipart media file'});
+    const projectId=safePart(req.body?.projectId||'project');
+    const build=safePart(req.body?.productionBuildVersion||'build');
+    const driveFileId=safePart(req.body?.driveFileId||req.body?.assetKey||req.file.originalname||Date.now());
+    const ext=path.extname(req.file.originalname||'')||'.mp4';
+    const dir=path.join(stagedRoot,projectId,build);
+    await fs.mkdir(dir,{recursive:true});
+    const target=path.join(dir,driveFileId+ext);
+    await fs.copyFile(req.file.path,target);
+    await fs.rm(req.file.path,{force:true}).catch(()=>{});
+    const rel=[projectId,build,path.basename(target)].map(encodeURIComponent).join('/');
+    res.json({
+      ok:true,
+      drive_file_id:req.body?.driveFileId||'',
+      staged_file_name:path.basename(target),
+      staged_url:`${publicBase(req)}/render-assets/${rel}`,
+      staged_local_url:`http://127.0.0.1:${PORT}/render-assets/${rel}`
+    });
+  }catch(e){
+    res.status(500).json({ok:false,error:compactError(e)});
+  }
+});
+
+app.post('/cleanup-staged-media',async(req,res)=>{
+  const projectId=safePart(req.body?.projectId||'');
+  const build=safePart(req.body?.productionBuildVersion||'');
+  if(!projectId||!build) return res.status(400).json({ok:false,error:'Missing project/build'});
+  await fs.rm(path.join(stagedRoot,projectId,build),{recursive:true,force:true}).catch(()=>{});
+  res.json({ok:true,projectId,productionBuildVersion:build});
+});
+
+app.post('/render-universal-scene',(req,res)=>{
+  const job=()=>renderUniversalOne(req.body,req);
+  const p=queue.then(job,job);
+  queue=p.catch(()=>{});
+  p.then(x=>res.json(x)).catch((e)=>{
+    const error=compactError(e);
+    console.error('render-universal-scene failed',error);
+    res.status(500).json({ok:false,error});
+  });
+});
+
+app.post('/render-universal-batch',async(req,res)=>{
+  const body=req.body||{};
+  const packages=Array.isArray(body.packages)?body.packages:[];
+  if(!packages.length) return res.status(400).json({ok:false,error:'Missing packages array'});
+  const results=[];
+  for(const item of packages){
+    try{
+      results.push(await renderUniversalOne(item,req));
+    }catch(e){
+      results.push({
+        ok:false,
+        sceneId:item?.sceneManifest?.scene_id||'',
+        projectId:item?.projectId||'',
+        productionBuildVersion:item?.productionBuildVersion||'',
+        error:compactError(e)
+      });
+    }
+    await new Promise(r=>setTimeout(r,350));
+  }
+  const failed=results.filter(x=>x.ok!==true).length;
+  res.status(failed?207:200).json({
+    ok:failed===0,
+    total:results.length,
+    rendered:results.length-failed,
+    failed,
+    results,
+    rendererVersion:'0.15.0',
+    strategy:'universal-sequential-media-aware'
+  });
+});
 
 app.get('/test-s01',async(req,res)=>{
   try{
@@ -357,7 +558,7 @@ app.post('/render-production-batch',async(req,res)=>{
     rendered:results.length-failed,
     failed,
     results,
-    rendererVersion:'0.14.0'
+    rendererVersion:'0.15.0'
   });
 });
 
