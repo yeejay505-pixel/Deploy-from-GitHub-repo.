@@ -22,6 +22,11 @@ const publicBase=(req)=>{
   return `${xf||req.protocol||'https'}://${req.get('host')}`;
 };
 
+function uploadedFile(req,name){
+  if(Array.isArray(req.files))return req.files.find(f=>String(f.fieldname||'')===String(name))||null;
+  return req.files?.[name]?.[0]||null;
+}
+
 function captionGroups(words=[]){
   const valid=(words||[]).map(w=>({word:String(w.word||'').trim(),start:num(w.start,0),end:num(w.end,0)}))
     .filter(w=>w.word&&w.end>=w.start);
@@ -193,14 +198,16 @@ export function createPremiumAssemblyHandler({here,outputs}){
 
       if(!projectId)throw new Error('Missing projectId');
       if(targetDuration<=0)throw new Error('Invalid targetDuration');
-      if(scenes.length!==8)throw new Error(`Expected 8 scenes, got ${scenes.length}`);
+      const expectedSceneCount=Math.max(1,Math.round(num(manifest.expectedSceneCount,scenes.length)));
+      if(scenes.length<1||scenes.length>25)throw new Error(`Expected 1-25 scenes, got ${scenes.length}`);
+      if(scenes.length!==expectedSceneCount)throw new Error(`Scene count mismatch: manifest expects ${expectedSceneCount}, got ${scenes.length}`);
 
-      const voiceFile=req.files?.voice?.[0];
+      const voiceFile=uploadedFile(req,'voice');
       if(!voiceFile)throw new Error('Missing multipart voice file.');
 
       for(const s of scenes){
         const field=`scene_${s.sceneId}`;
-        if(!req.files?.[field]?.[0])throw new Error(`Missing multipart scene file ${field}`);
+        if(!uploadedFile(req,field))throw new Error(`Missing multipart scene file ${field}`);
       }
 
       workDir=path.join(here,'premium-assembly-cache',`${safe(projectId)}_${Date.now()}`);
@@ -212,7 +219,7 @@ export function createPremiumAssemblyHandler({here,outputs}){
       const padded=[];
       for(let i=0;i<scenes.length;i++){
         const s=scenes[i];
-        const srcUpload=req.files[`scene_${s.sceneId}`][0];
+        const srcUpload=uploadedFile(req,`scene_${s.sceneId}`);
         const src=path.join(workDir,`${s.sceneId}_src.mp4`);
         await fs.copyFile(srcUpload.path,src);
 
@@ -261,7 +268,7 @@ export function createPremiumAssemblyHandler({here,outputs}){
       const meter=await measureLufs(finalPath);
 
       const qa=[
-        {checkName:'scene_count',result:scenes.length===8?'pass':'fail',measuredValue:String(scenes.length),targetValue:'8',tolerance:'0',notes:'All premium scene renders present.'},
+        {checkName:'scene_count',result:scenes.length===expectedSceneCount?'pass':'fail',measuredValue:String(scenes.length),targetValue:String(expectedSceneCount),tolerance:'0',notes:'All final-assembly scene renders present.'},
         {checkName:'duration',result:durationDelta<=.35?'pass':'fail',measuredValue:duration.toFixed(3),targetValue:targetDuration.toFixed(3),tolerance:'±0.35s',notes:`Delta ${durationDelta.toFixed(3)}s`},
         {checkName:'video_stream',result:video?.codec_name==='h264'?'pass':'fail',measuredValue:video?.codec_name||'missing',targetValue:'h264',tolerance:'exact',notes:'Premium final MP4 video codec.'},
         {checkName:'audio_stream',result:audio?.codec_name==='aac'?'pass':'fail',measuredValue:audio?.codec_name||'missing',targetValue:'aac',tolerance:'exact',notes:'Premium final MP4 audio codec.'},
@@ -293,7 +300,9 @@ export function createPremiumAssemblyHandler({here,outputs}){
       res.status(500).json({ok:false,error:raw.slice(-7000)});
     }finally{
       const all=[];
-      if(req.files&&typeof req.files==='object'){
+      if(Array.isArray(req.files)){
+        for(const f of req.files)if(f?.path)all.push(f.path);
+      }else if(req.files&&typeof req.files==='object'){
         for(const arr of Object.values(req.files))for(const f of (arr||[]))if(f?.path)all.push(f.path);
       }
       for(const p of all)await fs.rm(p,{force:true}).catch(()=>{});
