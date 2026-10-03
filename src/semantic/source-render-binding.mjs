@@ -7,6 +7,8 @@ const fail=message=>{throw Error(message);};
 const plain=v=>v&&typeof v==='object'&&!Array.isArray(v);
 const fields=(v,keys,label)=>{if(!plain(v)||Object.keys(v).some(k=>!keys.includes(k))||keys.some(k=>!Object.hasOwn(v,k)))fail(label+'_fields_invalid');};
 export const COMPONENTS={
+ checklist:{kind:'diagram',parameters:['progress','opacity'],operations:['reveal','grow','transform']},
+ office_lifecycle:{kind:'diagram',parameters:['build','open','fitout','occupied','opacity'],operations:['build','unfold','fitout','occupy','reveal','transform']},
  building:{kind:'diagram',parameters:['build','occupied','selected','opacity'],operations:['build','occupy','reveal','transform']},
  workspace:{kind:'diagram',parameters:['open','fitout','occupied','opacity'],operations:['unfold','fitout','occupy','reveal','transform']},
  queue:{kind:'diagram',parameters:['progress','opacity'],operations:['queue','grow','reveal','move']},
@@ -15,7 +17,7 @@ export const COMPONENTS={
  metric_range:{kind:'counter',parameters:['progress','opacity'],operations:['grow','reveal','transform']},
  metric_bar:{kind:'chart',parameters:['progress','opacity'],operations:['grow','reveal','transform']}
 };
-const conceptTypes=new Set(['building','workspace','queue','price_lock','lease']);
+const conceptTypes=new Set(['checklist','office_lifecycle','building','workspace','queue','price_lock','lease']);
 const norm=s=>s.toLowerCase().replace(/^_/,'').replace(/[^\p{L}\p{N}]/gu,'');
 export function validateMeasuredTiming(plan,timing){
  fields(timing,['schema_version','audio','sentences'],'timing');
@@ -65,7 +67,7 @@ export function compileSourceRender(job,rawPlan,timing,design){
   if(!Number.isFinite(x)||!Number.isFinite(y)||!Number.isFinite(scale)||x<100||x>870||y<640||y>1370||scale<.25||scale>1)fail('layout_out_of_safe_area');
   if(typeof o.label!=='string'||o.label.length>45||/\d/.test(o.label))fail('design_label_invalid');
   if(conceptTypes.has(o.component)){if(o.metric_id!==''||source.metric_ids.length||o.value_index!==0||o.scale_max!==0)fail('conceptual_component_metric_invalid');}
-  else{const m=metrics.get(o.metric_id);if(!m||source.metric_ids.length!==1||source.metric_ids[0]!==m.id||!Number.isInteger(o.value_index)||o.value_index<0||o.value_index>=m.values.length||!Number.isFinite(o.scale_max)||o.scale_max<=0||o.scale_max<Math.max(...m.values)||m.values.some(v=>v<0))fail('shared_metric_binding_invalid');if(o.component==='metric_bar'&&m.values.length!==1)fail('range_cannot_be_silently_rendered_as_single_bar');}
+  else{const m=metrics.get(o.metric_id);if(!m||source.metric_ids.length!==1||source.metric_ids[0]!==m.id||!Number.isInteger(o.value_index)||o.value_index<0||o.value_index>=m.values.length||!Number.isFinite(o.scale_max)||o.scale_max<=0||o.scale_max<Math.max(...m.values)||m.values.some(v=>v<0))fail('shared_metric_binding_invalid');if(o.component==='metric_bar'&&m.values.length!==1)fail('range_cannot_be_silently_rendered_as_single_bar');if(o.component==='metric_bar'&&/[<>≤≥~+]|\b(?:less than|more than|at least|at most|under|over|roughly|around|approximately|up to)\b/i.test(m.display_text))fail('qualified_value_cannot_be_an_exact_bar');}
   if(!Array.isArray(o.states)||!o.states.length)fail('state_bindings_required');
   const states=new Map();for(const s of o.states){fields(s,['name','parameters'],'state');if(typeof s.name!=='string'||!s.name.trim()||states.has(s.name))fail('state_binding_invalid');parameters(s.parameters,component);states.set(s.name,s.parameters);}
   if(!states.has(source.initial_state))fail('initial_state_binding_required');

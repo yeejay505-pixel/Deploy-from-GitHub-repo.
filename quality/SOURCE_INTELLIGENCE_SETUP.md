@@ -31,6 +31,9 @@ entailment, causal truth, correct units/denominators, the quality of an actual
 visual scene, or facts stated with numbers written as words. All source
 assertions remain unverified and semantic human review remains required.
 The output has no measured timings and is not an executable renderer manifest.
+The request includes optional supported composition state hints; unfamiliar
+meanings remain explicit for design review. See `SCENE_COMPOSER_SETUP.md` for
+the automatic template composer and its limits.
 New renders, final voice, factual verification and publication need their own
 approvals. The old 60-second limited semantic-preview planner is not used as
 an automatic quality fallback.

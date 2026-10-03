@@ -1,3 +1,4 @@
+import {compositionStateHints} from '../src/semantic/composition-templates.mjs';
 // This is a draft intelligence / visual-argument contract, not an executable
 // renderer manifest or an approval of the source's assertions.
 const str={type:'string'},strings={type:'array',items:str};
@@ -35,6 +36,7 @@ Extraction does not verify a claim. Attribute estimates and source assertions; p
 Definitions, examples and cause/effect relationships need claim IDs. Mark causal interpretations conditional unless explicitly asserted by the source. Empty arrays are allowed when the source does not support a category.
 Draft concise narration one sentence at a time. Every sentence cites selected claim IDs and must have all nine visual-argument fields.
 Objects have stable IDs and initial states. Each before state must equal the previous sentence's after state or the object's initial state. Each action changes an explanatory diagram/chart/counter, not just a presenter pose or caption. Action from/to states must match the declared before/after states; carry all state changes explicitly.
+The supplied composition_state_hints describe optional supported semantic states. Use their exact state names when they genuinely fit the visual mechanism; keep stable object meanings. Do not force an unsupported metaphor into a template or simplify the source argument merely to make it render. An unfamiliar state must remain explicit for design review. Conceptual construction/queue progress is not a market measurement.
 Plan deterministic SVG/canvas graphics for diagrams, charts, counters and labels. Generated presenter/illustrations/textures are selective assets and must never carry exact numeric state. This plan is not executable code and must not invent renderer capabilities.
 Metrics refer to selected source claims; display_text must be an exact substring of the source quote and numeric values must occur in it. Keep distinct periods/denominators separate. Use conceptual quantities only without unsupported market numbers.
 SFX target the visible action. Timings remain draft_unmeasured until final narration is measured. Preserve the supplied light visual profile and benchmark hash. Never approve a render, final voice, facts or publication.`;
@@ -45,7 +47,7 @@ export function sourceContext(job){
  const claims=job.extraction.claims;
  if(claims.length>1500||JSON.stringify(claims).length>700000)throw Error('source_chunking_required');
  const ids=new Set();for(const c of claims){if(!c.claim_id||ids.has(c.claim_id)||!c.text||!c.source_locations?.length||c.status!=='source_assertion_unverified')throw Error('invalid_source_ledger');ids.add(c.claim_id);}
- return {event_id:job.event_id,original_brief:job.intake.original_brief,quality_profile:job.intake.quality_profile,selection:job.extraction.selection??null,claims};
+ return {event_id:job.event_id,original_brief:job.intake.original_brief,quality_profile:job.intake.quality_profile,selection:job.extraction.selection??null,composition_state_hints:compositionStateHints(),claims};
 }
 export function buildIntelligenceRequest(job,model){
  if(!model||/REPLACE|PLACEHOLDER/i.test(model))throw Error('intelligence_model_configuration_required');

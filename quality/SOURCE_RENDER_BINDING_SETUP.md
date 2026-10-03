@@ -90,8 +90,9 @@ every component or topic. The original approved v05 video remains unchanged.
 ## Remaining live integration
 
 - Bind retained 03S drafts to a trusted design/component selection stage.
-  Current design bindings are authored locally; prose is not auto-converted
-  to numeric animation states.
+  Automatic template composition now supplies bindings for supported roles,
+  operations and state names; see `SCENE_COMPOSER_SETUP.md`. Free-form
+  metaphors and states still need reviewed designs.
 - Connect final narration and a trustworthy alignment provider; verify voice.
 - Add music, more transitions and missing visual components as needed.
 - Connect this renderer to the live n8n project/session and durable render-job
