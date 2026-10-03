@@ -1,9 +1,10 @@
-// Private, single-host durable queue. HTTP callers supply only an event ID.
+// Private durable queue; callers select an event and optionally an immutable reviewed revision.
 import fs from 'node:fs';
 import path from 'node:path';
 import {createHash,randomUUID} from 'node:crypto';
 import {fileURLToPath} from 'node:url';
 import {GatewayError} from './gateway-store.mjs';
+import {ReviewedPlanAdapter} from '../intelligence/reviewed-plan-store.mjs';
 import {INTELLIGENCE_SCHEMA,validateIntelligencePlan} from '../intelligence/plan-contract.mjs';
 
 export const RENDER_LEASE_MS=45000,MAX_RENDER_ATTEMPTS=3;
@@ -37,12 +38,16 @@ export class RenderAdapter {
   const artifacts=r.artifacts?JSON.parse(r.artifacts):{};
   return {event_id:id,status:r.status,stage:r.stage,input_hash:r.input_hash,attempts:r.attempts,progress:r.progress?JSON.parse(r.progress):null,error:r.error,report:r.report?JSON.parse(r.report):null,receipt:r.receipt?JSON.parse(r.receipt):null,
    artifacts:Object.entries(artifacts).map(([key,a])=>({key,sha256:a.sha256,size_bytes:a.size_bytes,mime_type:a.mime_type,path:'/intake/jobs/'+encodeURIComponent(id)+'/render/artifacts/'+key})),
-   review:{facts_verified:false,voice_status:'guide',creative_approval:'pending',publication:'not_authorized'},release_eligible:false};
+   plan_origin:JSON.parse(r.input).plan_origin??'validated_model_draft',review_revision_id:JSON.parse(r.input).review_revision_id??null,review:{facts_verified:false,voice_status:'guide',creative_approval:'pending',publication:'not_authorized'},release_eligible:false};
  }
- enqueue(id){
-  const job=this.store.get(id),prior=this.row(id);if(prior)return {duplicate:true,...this.get(id)};
+ enqueue(id,{reviewRevisionId=''}={}){
+  if(typeof reviewRevisionId!=='string')throw new GatewayError('review_revision_id_invalid',400);
+  const job=this.store.get(id),prior=this.row(id);
+  if(prior){if((JSON.parse(prior.input).review_revision_id??'')!==reviewRevisionId)throw new GatewayError('render_revision_conflict');return {duplicate:true,...this.get(id)};}
   if(!this.guideEnabled||!this.assetDirectory)return {status:'configuration_required',reason:'trusted_assets_and_local_guide_adapter_required',event_id:id,release_eligible:false};
-  const intel=this.store.db.prepare('SELECT status,plan,receipt FROM intelligence_runs WHERE event_id=?').get(id);
+  let intel;
+  if(reviewRevisionId){const reviewed=new ReviewedPlanAdapter(this.store).loadForRender(id,reviewRevisionId);intel={status:'validated_draft',plan:JSON.stringify(reviewed.plan),receipt:JSON.stringify(reviewed.receipt)};}
+  else intel=this.store.db.prepare('SELECT status,plan,receipt FROM intelligence_runs WHERE event_id=?').get(id);
   if(intel?.status!=='validated_draft')return {status:'intelligence_required',event_id:id,release_eligible:false};
   if(job.intake.reason||job.intake.re_project_key||!['source_brief_intelligence','asset_intelligence'].includes(job.route))return {status:'review_required',reason:'source_render_route_not_supported',event_id:id,release_eligible:false};
   if(job.intake.quality_profile.reference.sha256!==this.store.profile.reference.sha256)throw new GatewayError('stored_quality_profile_changed');
@@ -60,10 +65,11 @@ export class RenderAdapter {
    });
   }catch(e){throw new GatewayError(/^(asset_|relative_)/.test(e.message)?e.message:'trusted_asset_configuration_invalid',503);}
   files.push(...sources);
-  const input={schema_version:'durable-source-render-input.v1',job,plan,catalog,files:files.map(({path,sha256})=>({path,sha256})),intelligence_receipt:JSON.parse(intel.receipt),runtime_hash:this.runtimeHash,voice_adapter:'local_flite_guide_unapproved'};
+  const input={schema_version:'durable-source-render-input.v1',job,plan,catalog,files:files.map(({path,sha256})=>({path,sha256})),intelligence_receipt:JSON.parse(intel.receipt),review_revision_id:reviewRevisionId,plan_origin:reviewRevisionId?'operator_reviewed_revision':'validated_model_draft',runtime_hash:this.runtimeHash,voice_adapter:'local_flite_guide_unapproved'};
   const inputHash=jsonHash(input);
   return this.store.transaction(()=>{
-   if(this.row(id))return {duplicate:true,...this.get(id)};
+   const concurrent=this.row(id);if(concurrent){if((JSON.parse(concurrent.input).review_revision_id??'')!==reviewRevisionId)throw new GatewayError('render_revision_conflict');return {duplicate:true,...this.get(id)};}
+   if(reviewRevisionId)new ReviewedPlanAdapter(this.store).loadForRender(id,reviewRevisionId);
    for(const file of files){const existing=this.store.db.prepare('SELECT bytes FROM blobs WHERE sha256=?').get(file.sha256);if(existing&&digest(Buffer.from(existing.bytes))!==file.sha256)throw new GatewayError('render_input_integrity_failed');this.store.db.prepare('INSERT OR IGNORE INTO blobs(sha256,size_bytes,bytes) VALUES(?,?,?)').run(file.sha256,file.bytes.length,file.bytes);}
    const now=this.store.now();this.store.db.prepare("INSERT INTO render_runs(event_id,input_hash,input,status,stage,created_at,updated_at) VALUES(?,?,?,'queued','queued',?,?)").run(id,inputHash,JSON.stringify(input),now,now);this.store.log(id,'render_queued',{input_hash:inputHash,voice:'guide'});return {duplicate:false,...this.get(id)};
   });

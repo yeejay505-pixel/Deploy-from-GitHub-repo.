@@ -6,10 +6,11 @@ import path from 'node:path';
 import {IntakeStore,GatewayError,MAX_SOURCE_BYTES} from './gateway-store.mjs';
 import {extractRetainedSource} from './source-extractor.mjs';
 import {IntelligenceAdapter} from '../intelligence/adapter-store.mjs';
+import {ReviewedPlanAdapter} from '../intelligence/reviewed-plan-store.mjs';
 import {RenderAdapter} from './render-adapter.mjs';
 import {DurableRenderWorker} from './render-worker.mjs';
 
-export function createIntakeRoutes({app,directory,token,profile,allowedChatIds,bindings={},durableStorageConfirmed=false,forbiddenDirectories=[],intelligence={},render={}}){
+export function createIntakeRoutes({app,directory,token,profile,allowedChatIds,bindings={},durableStorageConfirmed=false,forbiddenDirectories=[],intelligence={},render={},reviewedPlans={}}){
   if(!directory||!token||!durableStorageConfirmed)throw new GatewayError('intake_storage_and_auth_configuration_required',503);
   if(!path.isAbsolute(directory))throw new GatewayError('absolute_store_directory_required',503);
   fs.mkdirSync(directory,{recursive:true,mode:0o700});
@@ -17,6 +18,7 @@ export function createIntakeRoutes({app,directory,token,profile,allowedChatIds,b
   for(const root of forbiddenDirectories){const relative=path.relative(fs.realpathSync(root),actual);if(relative===''||(!relative.startsWith('..'+path.sep)&&relative!=='..'&&!path.isAbsolute(relative)))throw new GatewayError('private_store_directory_required',503);}
   const store=new IntakeStore({directory,profile,allowedChatIds,bindings});
   const adapter=new IntelligenceAdapter(store,intelligence);
+  const reviewer=new ReviewedPlanAdapter(store,reviewedPlans);
   const renderer=new RenderAdapter(store,{directory,...render});
   const renderWorker=render.workerEnabled===true?new DurableRenderWorker(renderer):null;
   if(renderWorker&&!render.guideEnabled)throw new GatewayError('local_guide_adapter_must_be_configured',503);
@@ -47,11 +49,14 @@ export function createIntakeRoutes({app,directory,token,profile,allowedChatIds,b
   router.get('/jobs/:id/intelligence',perform(async(req,res)=>{store.get(req.params.id);res.json({ok:true,...adapter.get(req.params.id)});}));
   router.post('/jobs/:id/intelligence/prepare',perform(async(req,res)=>res.json({ok:true,...adapter.prepare(req.params.id)})));
   router.post('/jobs/:id/intelligence/retry',perform(async(req,res)=>res.json({ok:true,...adapter.retry(req.params.id,req.body)})));
+  router.get('/jobs/:id/intelligence/revisions',perform(async(req,res)=>res.json({ok:true,...reviewer.list(req.params.id)})));
+  router.get('/jobs/:id/intelligence/revisions/:revision',perform(async(req,res)=>res.json({ok:true,...reviewer.get(req.params.id,req.params.revision)})));
+  router.post('/jobs/:id/intelligence/revisions',perform(async(req,res)=>res.json({ok:true,...reviewer.submit(req.params.id,req.body)})));
   router.post('/jobs/:id/intelligence/call',perform(async(req,res)=>res.json({ok:true,...adapter.authorizeCall(req.params.id)})));
   router.post('/jobs/:id/intelligence/result',perform(async(req,res)=>res.json({ok:true,...adapter.recordResult(req.params.id,req.body?.call_token,req.body?.response)})));
   router.post('/jobs/:id/render/enqueue',perform(async(req,res)=>{
     // Ignore caller-supplied plans, timing, asset paths, QC and approval flags.
-    const result=renderer.enqueue(req.params.id);res.status(result.status==='queued'?202:200).json({ok:true,...result});
+    const result=renderer.enqueue(req.params.id,{reviewRevisionId:req.body?.review_revision_id??''});res.status(result.status==='queued'?202:200).json({ok:true,...result});
   }));
   router.get('/jobs/:id/render',perform(async(req,res)=>res.json({ok:true,...renderer.get(req.params.id)})));
   router.get('/jobs/:id/render/artifacts/:key',perform(async(req,res)=>{
@@ -65,5 +70,5 @@ export function createIntakeRoutes({app,directory,token,profile,allowedChatIds,b
   });
   app.use('/intake',router);
   renderWorker?.start();
-  return {store,adapter,renderer,renderWorker,close:()=>renderWorker?renderWorker.stop().then(()=>store.close()):store.close()};
+  return {store,adapter,reviewer,renderer,renderWorker,close:()=>renderWorker?renderWorker.stop().then(()=>store.close()):store.close()};
 }

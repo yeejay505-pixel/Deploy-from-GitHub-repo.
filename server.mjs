@@ -86,6 +86,7 @@ if(process.env.INTAKE_STORE_DIR){
   const intake=createIntakeRoutes({app,directory:process.env.INTAKE_STORE_DIR,token:process.env.INTAKE_TOKEN,
     profile,bindings,allowedChatIds:JSON.parse(process.env.INTAKE_ALLOWED_CHAT_IDS||'["8580375575"]'),
     durableStorageConfirmed:process.env.INTAKE_DURABLE_STORAGE_CONFIRMED==='1',forbiddenDirectories:[here],
+    reviewedPlans:{enabled:process.env.INTAKE_REVIEWED_PLAN_ENABLED==='1'},
     intelligence:{model:process.env.INTAKE_INTELLIGENCE_MODEL||'',paidCallsEnabled:process.env.INTAKE_INTELLIGENCE_PAID_ENABLED==='1'},
     render:{assetDirectory:process.env.INTAKE_RENDER_ASSET_DIR||'',guideEnabled:process.env.INTAKE_RENDER_GUIDE_ENABLED==='1',workerEnabled:process.env.INTAKE_RENDER_WORKER_ENABLED==='1'}});
   for(const signal of ['SIGTERM','SIGINT'])process.once(signal,()=>{Promise.resolve(intake.close()).then(()=>process.exit(0));});

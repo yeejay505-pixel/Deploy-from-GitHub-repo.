@@ -25,15 +25,16 @@ const cueWords={build:['build','built','construction','deliver','delivery'],unfo
 function wordsForNumber(value){const small=['zero','one','two','three','four','five','six','seven','eight','nine','ten','eleven','twelve','thirteen','fourteen','fifteen','sixteen','seventeen','eighteen','nineteen'];if(Number.isInteger(value)&&value>=0&&value<20)return [String(value),small[value]];if(Number.isInteger(value)&&value<100&&value>=20){const tens=['','','twenty','thirty','forty','fifty','sixty','seventy','eighty','ninety'];return [String(value),tens[Math.floor(value/10)]+(value%10?' '+small[value%10]:'')];}return [String(value)];}
 function anchorAction(a,o,t,metric){
  const words=t.words.map(w=>normal(w.word)),found=[];let basis='measured_sentence_window';
- if(metric){
+ const before=o.states.find(s=>s.name===a.from_state)?.parameters,after=o.states.find(s=>s.name===a.to_state)?.parameters;
+ const retiring=before?.opacity>0&&after?.opacity===0;
+ if(metric&&!retiring){
   const hits=[];for(const value of metric.values){let hit=-1,length=1;for(const form of wordsForNumber(value)){const parts=form.split(' ');for(let i=0;i<=words.length-parts.length;i++){if(parts.every((p,j)=>words[i+j]===p)){hit=i;length=parts.length;break;}}if(hit>=0)break;}if(hit<0)throw Error('spoken_quantity_anchor_required');hits.push({start:hit,end:hit+length-1});}
   found.push(...hits.flatMap(x=>[x.start,x.end]));const last=Math.max(...found);if(['percent','years','year'].includes(words[last+1]))found.push(last+1);basis='measured_source_quantity_words';
- }else{
+ }else if(!retiring){
   const keys=cueWords[a.operation]??[];words.forEach((w,i)=>{if(keys.includes(w))found.push(i);});if(found.length)basis='measured_operation_words';
  }
  let start=found.length?Math.min(...found):0,end=found.length?Math.max(...found):words.length-1;
- const before=o.states.find(s=>s.name===a.from_state)?.parameters,after=o.states.find(s=>s.name===a.to_state)?.parameters;
- if(before?.opacity>0&&after?.opacity===0){start=0;end=Math.min(1,words.length-1);basis='measured_context_retirement';}
+ if(retiring){start=0;end=Math.min(1,words.length-1);basis='measured_context_retirement';}
  if(t.words[end].end-t.words[start].start<.2){end=Math.min(words.length-1,end+1);if(t.words[end].end-t.words[start].start<1/30)throw Error('measured_anchor_interval_too_short');}
  return {binding:{object_id:a.object_id,start:{word_index:start,edge:'start'},end:{word_index:end,edge:'end'}},basis};
 }
@@ -86,7 +87,9 @@ export function composeSceneDesign(job,rawPlan,timing,assetCatalog){
    const metric=o.metric_ids.length?metrics.get(o.metric_ids[0]):null;
    if(metric?.values.some(v=>v<0)){report.issues.push({code:'negative_metric_component_required',object_id:o.id});continue;}
    const scaleMax=metric?Math.max(...metric.values,1):0;
-   objects.push({id:o.id,component,layout:{...layouts[component]},label:labels[component],metric_id:metric?.id??'',value_index:0,scale_max:scaleMax,states});
+   const layout=component==='office_lifecycle'&&plan.objects.some(x=>x.kind==='counter'&&x.metric_ids.length)?{x:465,y:1220,scale:.55}:{...layouts[component]};
+   if(component==='office_lifecycle'&&layout.scale===.55)report.decisions.push({object_id:o.id,layout:'compact_office_with_source_ranges',basis:'Separate metric scope labels from the persistent office asset'});
+   objects.push({id:o.id,component,layout,label:labels[component],metric_id:metric?.id??'',value_index:0,scale_max:scaleMax,states});
    report.decisions.push({object_id:o.id,component,basis:'role_operations_and_exact_state_templates',conceptual_parameters:!metric,metric_id:metric?.id??null});
   }
   if(report.issues.length)return {design:null,manifest:null,report};
@@ -96,7 +99,7 @@ export function composeSceneDesign(job,rawPlan,timing,assetCatalog){
    for(const a of v.visible_action){const o=objectMap.get(a.object_id),metric=o.metric_id?metrics.get(o.metric_id):null;const anchored=anchorAction(a,o,t,metric);action_anchors.push(anchored.binding);report.decisions.push({sentence_id:s.id,object_id:a.object_id,anchor_basis:anchored.basis});}
    const retiring=action_anchors.filter(a=>{const o=objectMap.get(a.object_id),semantic=v.visible_action.find(x=>x.object_id===o.id),from=o.states.find(x=>x.name===semantic.from_state).parameters,to=o.states.find(x=>x.name===semantic.to_state).parameters;return from.opacity>0&&to.opacity===0;});
    if(retiring.length){const retirementEnd=Math.max(...retiring.map(a=>t.words[a.end.word_index].end));for(const b of action_anchors){if(retiring.includes(b))continue;const o=objectMap.get(b.object_id),semantic=v.visible_action.find(x=>x.object_id===o.id),from=o.states.find(x=>x.name===semantic.from_state).parameters,to=o.states.find(x=>x.name===semantic.to_state).parameters;if(from.opacity===0&&to.opacity>0&&t.words[b.start.word_index].start<retirementEnd){const next=t.words.findIndex(w=>w.start>=retirementEnd);if(next<0||next>b.end.word_index)throw Error('measured_handoff_window_required');b.start.word_index=next;}}}
-   const focus=[...v.visible_action].sort((a,b)=>Number(objectMap.get(b.object_id).states.find(s=>s.name===b.to_state).parameters.opacity>0)-Number(objectMap.get(a.object_id).states.find(s=>s.name===a.to_state).parameters.opacity>0)||Number(Boolean(objectMap.get(b.object_id).metric_id))-Number(Boolean(objectMap.get(a.object_id).metric_id)))[0],component=objectMap.get(focus.object_id).component,heading=headings[component]??headings[focus.operation];
+   const focus=[...v.visible_action].sort((a,b)=>Number(objectMap.get(b.object_id).states.find(s=>s.name===b.to_state).parameters.opacity>0)-Number(objectMap.get(a.object_id).states.find(s=>s.name===a.to_state).parameters.opacity>0)||Number(Boolean(objectMap.get(b.object_id).metric_id))-Number(Boolean(objectMap.get(a.object_id).metric_id)))[0],component=objectMap.get(focus.object_id).component,focusMetric=metrics.get(objectMap.get(focus.object_id).metric_id),heading=component==='metric_range'&&/appreciation/i.test(focusMetric.measure)?['Potential appreciation.','A separate projection.']:component==='metric_range'&&/rental.*yield/i.test(focusMetric.measure)?['Rental yield.','A different measure.']:component==='metric_range'&&/rent.*growth/i.test(focusMetric.measure)?['Rental growth.','Keep its context.']:headings[component]??headings[focus.operation];
    if(!heading)throw Error('headline_template_required');sentences.push({id:s.id,headline:[...heading],action_anchors,transition_duration:Math.min(.28,t.end-t.start)});
    const pose=(component.startsWith('metric')||s.phase==='problem')?'think':focus.operation==='lock'||s.phase==='consequence'?'point':'explain';if(!assetCatalog.presenter.poses.some(p=>p.id===pose))throw Error('presenter_pose_unavailable');events.push({sentence_id:s.id,pose});
   }
