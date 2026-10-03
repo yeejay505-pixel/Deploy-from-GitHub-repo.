@@ -9,12 +9,15 @@ export class IntelligenceAdapter {
   store.db.exec(`CREATE TABLE IF NOT EXISTS intelligence_runs (
    event_id TEXT PRIMARY KEY REFERENCES jobs(event_id),input_hash TEXT NOT NULL,request TEXT NOT NULL,
    status TEXT NOT NULL,call_token TEXT,plan TEXT,receipt TEXT,usage TEXT,response_id TEXT,error TEXT,
-   created_at INTEGER NOT NULL,updated_at INTEGER NOT NULL);`);
+   created_at INTEGER NOT NULL,updated_at INTEGER NOT NULL);
+   CREATE TABLE IF NOT EXISTS intelligence_retry_history (
+   event_id TEXT PRIMARY KEY REFERENCES jobs(event_id),review_hash TEXT NOT NULL,
+   prior_run TEXT NOT NULL,reason TEXT NOT NULL,created_at INTEGER NOT NULL);`);
  }
  get(id){
   const r=this.store.db.prepare('SELECT * FROM intelligence_runs WHERE event_id=?').get(id);
   if(!r)return {event_id:id,status:'not_prepared',receipt:null,plan:null,release_eligible:false};
-  return {event_id:id,status:r.status,plan:r.plan?JSON.parse(r.plan):null,receipt:r.receipt?JSON.parse(r.receipt):null,usage:r.usage?JSON.parse(r.usage):null,response_id:r.response_id,error:r.error,release_eligible:false};
+  return {event_id:id,status:r.status,review_hash:r.status==='review_required'?hash(r):null,retry_used:Boolean(this.store.db.prepare('SELECT event_id FROM intelligence_retry_history WHERE event_id=?').get(id)),plan:r.plan?JSON.parse(r.plan):null,receipt:r.receipt?JSON.parse(r.receipt):null,usage:r.usage?JSON.parse(r.usage):null,response_id:r.response_id,error:r.error,release_eligible:false};
  }
  prepare(id){
   const job=this.store.get(id);let request;
@@ -26,6 +29,24 @@ export class IntelligenceAdapter {
    if(prior){if(prior.input_hash!==inputHash)throw new GatewayError('intelligence_input_conflict');return {ready:prior.status==='prepared',duplicate:true,...this.get(id)};}
    const now=this.store.now();this.store.db.prepare("INSERT INTO intelligence_runs(event_id,input_hash,request,status,created_at,updated_at) VALUES(?,?,?,'prepared',?,?)").run(id,inputHash,JSON.stringify(request),now,now);this.store.log(id,'intelligence_prepared',{model:this.model});
    return {ready:true,duplicate:false,...this.get(id)};
+  });
+ }
+ retry(id,input={}){
+  // Explicit operator action; never invoked by prepare/call or an automatic retry.
+  if(input?.acknowledge_paid_call!==true||typeof input.reason!=='string'||input.reason.trim().length<12||input.reason.length>1000||typeof input.expected_review_hash!=='string')throw new GatewayError('explicit_retry_review_required',400);
+  return this.store.transaction(()=>{
+   const r=this.store.db.prepare('SELECT * FROM intelligence_runs WHERE event_id=?').get(id);
+   if(!r||r.status!=='review_required'||!r.response_id)throw new GatewayError('completed_review_failure_required');
+   if(this.store.db.prepare('SELECT event_id FROM intelligence_retry_history WHERE event_id=?').get(id))throw new GatewayError('retry_budget_exhausted');
+   if(hash(r)!==input.expected_review_hash)throw new GatewayError('retry_review_conflict');
+   const job=this.store.get(id);
+   if(hash(sourceContext(job))!==r.input_hash)throw new GatewayError('intelligence_input_conflict');
+   if(job.intake.quality_profile.reference.sha256!==this.store.profile.reference.sha256)throw new GatewayError('stored_quality_profile_changed');
+   const request=buildIntelligenceRequest(job,this.model),now=this.store.now();
+   this.store.db.prepare('INSERT INTO intelligence_retry_history(event_id,review_hash,prior_run,reason,created_at) VALUES(?,?,?,?,?)').run(id,hash(r),JSON.stringify(r),input.reason.trim(),now);
+   this.store.db.prepare("UPDATE intelligence_runs SET request=?,status='prepared',call_token=NULL,plan=NULL,receipt=NULL,usage=NULL,response_id=NULL,error=NULL,updated_at=? WHERE event_id=?").run(JSON.stringify(request),now,id);
+   this.store.log(id,'intelligence_operator_retry_prepared',{prior_response_id:r.response_id,prior_error:r.error,reason:input.reason.trim(),review_hash:hash(r)});
+   return {ready:true,...this.get(id)};
   });
  }
  authorizeCall(id){

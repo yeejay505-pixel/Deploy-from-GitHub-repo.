@@ -46,6 +46,7 @@ export function createIntakeRoutes({app,directory,token,profile,allowedChatIds,b
   router.post('/jobs/:id/complete',perform(async(req,res)=>res.json({ok:true,job:store.complete(req.params.id,req.body?.lease_token,req.body?.receipt)})));
   router.get('/jobs/:id/intelligence',perform(async(req,res)=>{store.get(req.params.id);res.json({ok:true,...adapter.get(req.params.id)});}));
   router.post('/jobs/:id/intelligence/prepare',perform(async(req,res)=>res.json({ok:true,...adapter.prepare(req.params.id)})));
+  router.post('/jobs/:id/intelligence/retry',perform(async(req,res)=>res.json({ok:true,...adapter.retry(req.params.id,req.body)})));
   router.post('/jobs/:id/intelligence/call',perform(async(req,res)=>res.json({ok:true,...adapter.authorizeCall(req.params.id)})));
   router.post('/jobs/:id/intelligence/result',perform(async(req,res)=>res.json({ok:true,...adapter.recordResult(req.params.id,req.body?.call_token,req.body?.response)})));
   router.post('/jobs/:id/render/enqueue',perform(async(req,res)=>{
