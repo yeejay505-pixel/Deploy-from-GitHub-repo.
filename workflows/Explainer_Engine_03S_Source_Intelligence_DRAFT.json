@@ -1,0 +1,488 @@
+{
+  "name": "Explainer Engine — 03S Source-aware Intelligence — DRAFT",
+  "active": false,
+  "nodes": [
+    {
+      "id": "manual-dry-run",
+      "name": "Manual Dry Run",
+      "type": "n8n-nodes-base.manualTrigger",
+      "typeVersion": 1,
+      "position": [
+        0,
+        0
+      ],
+      "parameters": {}
+    },
+    {
+      "id": "example-handoff",
+      "name": "Example Handoff",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        220,
+        0
+      ],
+      "parameters": {
+        "jsCode": "return [{json:{schema_version:'intake-handoff.v1',idempotency_key:'FIXTURE_ONLY_NOT_A_STORED_EVENT',job_id:'fixture',release_eligible:false}}];"
+      }
+    },
+    {
+      "id": "when-executed-by-gateway",
+      "name": "When Executed By Gateway",
+      "type": "n8n-nodes-base.executeWorkflowTrigger",
+      "typeVersion": 1.1,
+      "position": [
+        220,
+        240
+      ],
+      "parameters": {
+        "inputSource": "passthrough"
+      }
+    },
+    {
+      "id": "configure-adapter",
+      "name": "Configure Adapter",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        440,
+        120
+      ],
+      "parameters": {
+        "jsCode": "const items=$input.all();if(items.length!==1)throw Error('One handoff per execution required.');return items.map(i=>({json:{handoff:i.json,event_id:i.json.idempotency_key,config:{\"enabled\":false,\"base_url\":\"https://REPLACE_WITH_EXISTING_RENDERER_HOST\"}}}));"
+      }
+    },
+    {
+      "id": "adapter-enabled",
+      "name": "Adapter Enabled",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        660,
+        120
+      ],
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 2
+          },
+          "conditions": [
+            {
+              "id": "Adapter Enabled",
+              "leftValue": "={{ $json.config.enabled === true }}",
+              "rightValue": true,
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      }
+    },
+    {
+      "id": "return-dry-run",
+      "name": "Return Dry Run",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        880,
+        320
+      ],
+      "parameters": {
+        "jsCode": "return [{json:{dry_run:true,adapter:'source-aware-intelligence',calls_performed:false,receipt:null,release_eligible:false,next:'Deploy and bind the intake API; select a server-side model and credential before enabling.'}}];"
+      }
+    },
+    {
+      "id": "check-adapter-configuration",
+      "name": "Check Adapter Configuration",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        880,
+        0
+      ],
+      "parameters": {
+        "jsCode": "const j=$input.first().json;if(j.handoff.schema_version!=='intake-handoff.v1'||!j.event_id||j.config.base_url.includes('REPLACE')||!j.config.base_url.startsWith('https://'))throw Error('Stored handoff and configured HTTPS host required.');j.config.base_url=j.config.base_url.replace(/\\/$/,'');return [{json:j}];"
+      }
+    },
+    {
+      "id": "prepare-stored-source-plan",
+      "name": "Prepare Stored Source Plan",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        1100,
+        0
+      ],
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $items('Check Adapter Configuration')[0].json.config.base_url + '/intake/jobs/' + encodeURIComponent($items('Check Adapter Configuration')[0].json.event_id) + '/intelligence/prepare' }}",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({}) }}",
+        "options": {
+          "timeout": 60000
+        }
+      }
+    },
+    {
+      "id": "plan-prepared",
+      "name": "Plan Prepared",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        1320,
+        0
+      ],
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 2
+          },
+          "conditions": [
+            {
+              "id": "Plan Prepared",
+              "leftValue": "={{ $json.ready === true }}",
+              "rightValue": true,
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      }
+    },
+    {
+      "id": "reserve-one-model-call",
+      "name": "Reserve One Model Call",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        1540,
+        -100
+      ],
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $items('Check Adapter Configuration')[0].json.config.base_url + '/intake/jobs/' + encodeURIComponent($items('Check Adapter Configuration')[0].json.event_id) + '/intelligence/call' }}",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({}) }}",
+        "options": {
+          "timeout": 60000
+        }
+      }
+    },
+    {
+      "id": "model-call-permitted",
+      "name": "Model Call Permitted",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        1760,
+        -100
+      ],
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 2
+          },
+          "conditions": [
+            {
+              "id": "Model Call Permitted",
+              "leftValue": "={{ $json.permitted === true }}",
+              "rightValue": true,
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      }
+    },
+    {
+      "id": "openai-draft-source-plan",
+      "name": "OpenAI Draft Source Plan",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        1980,
+        -200
+      ],
+      "parameters": {
+        "method": "POST",
+        "url": "https://api.openai.com/v1/responses",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "openAiApi",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify($json.request) }}",
+        "options": {
+          "timeout": 180000
+        }
+      },
+      "onError": "continueRegularOutput",
+      "retryOnFail": false
+    },
+    {
+      "id": "prepare-result-record",
+      "name": "Prepare Result Record",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        2200,
+        -200
+      ],
+      "parameters": {
+        "jsCode": "const permit=$items('Reserve One Model Call')[0].json;return [{json:{call_token:permit.call_token,response:$input.first().json}}];"
+      }
+    },
+    {
+      "id": "validate-and-store-draft",
+      "name": "Validate And Store Draft",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        2420,
+        -200
+      ],
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $items('Check Adapter Configuration')[0].json.config.base_url + '/intake/jobs/' + encodeURIComponent($items('Check Adapter Configuration')[0].json.event_id) + '/intelligence/result' }}",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify($json) }}",
+        "options": {
+          "timeout": 60000
+        }
+      }
+    },
+    {
+      "id": "return-stored-receipt-or-review",
+      "name": "Return Stored Receipt Or Review",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        2640,
+        120
+      ],
+      "parameters": {
+        "jsCode": "const r=$input.first().json;if(r.receipt?.schema_version==='intake-receipt.v1')return [{json:r.receipt}];return [{json:{status:r.status||'review_required',reason:r.error||r.reason||null,receipt:null,release_eligible:false}}];"
+      }
+    },
+    {
+      "id": "setup-notes",
+      "name": "Setup Notes",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [
+        440,
+        -490
+      ],
+      "parameters": {
+        "height": 410,
+        "width": 1100,
+        "content": "## Workflow 03S — Source-aware intelligence — DRAFT\nInactive; enabled=false. Manual run is offline and does not invent a success receipt.\n\nUse the existing engine, not the separate V2.0 project. Deploy the reviewed intake API first. Configure a server-side INTAKE_INTELLIGENCE_MODEL, then verify your existing OpenAI credential. INTAKE_INTELLIGENCE_PAID_ENABLED must be explicitly enabled before the server permits one model call.\n\nBind Header Auth to Prepare, Reserve and Store nodes; bind OpenAI credential only to OpenAI Draft Source Plan. No secrets or model guesses are in this export.\n\nThe server loads actual retained sources by event ID, preserves claim IDs / quotes / locations, validates the narrative and all sentence visual fields, and returns a stored receipt only after a valid draft. Free topics without source evidence require research. A missing, refused or invalid model response stops for review; no automatic paid retry.\n\nThe output is a review-pending intelligence draft, not measured scene timing, approved voice or a publishable render. Read quality/SOURCE_INTELLIGENCE_SETUP.md before binding the actual imported workflow ID in the gateway."
+      }
+    }
+  ],
+  "connections": {
+    "Manual Dry Run": {
+      "main": [
+        [
+          {
+            "node": "Example Handoff",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Example Handoff": {
+      "main": [
+        [
+          {
+            "node": "Configure Adapter",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "When Executed By Gateway": {
+      "main": [
+        [
+          {
+            "node": "Configure Adapter",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Configure Adapter": {
+      "main": [
+        [
+          {
+            "node": "Adapter Enabled",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Adapter Enabled": {
+      "main": [
+        [
+          {
+            "node": "Check Adapter Configuration",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Return Dry Run",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Check Adapter Configuration": {
+      "main": [
+        [
+          {
+            "node": "Prepare Stored Source Plan",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Prepare Stored Source Plan": {
+      "main": [
+        [
+          {
+            "node": "Plan Prepared",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Plan Prepared": {
+      "main": [
+        [
+          {
+            "node": "Reserve One Model Call",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Return Stored Receipt Or Review",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Reserve One Model Call": {
+      "main": [
+        [
+          {
+            "node": "Model Call Permitted",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Model Call Permitted": {
+      "main": [
+        [
+          {
+            "node": "OpenAI Draft Source Plan",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Return Stored Receipt Or Review",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "OpenAI Draft Source Plan": {
+      "main": [
+        [
+          {
+            "node": "Prepare Result Record",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Prepare Result Record": {
+      "main": [
+        [
+          {
+            "node": "Validate And Store Draft",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Validate And Store Draft": {
+      "main": [
+        [
+          {
+            "node": "Return Stored Receipt Or Review",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "pinData": {},
+  "meta": {
+    "templateCredsSetupCompleted": false
+  }
+}

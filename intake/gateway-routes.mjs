@@ -5,14 +5,16 @@ import fs from 'node:fs';
 import path from 'node:path';
 import {IntakeStore,GatewayError,MAX_SOURCE_BYTES} from './gateway-store.mjs';
 import {extractRetainedSource} from './source-extractor.mjs';
+import {IntelligenceAdapter} from '../intelligence/adapter-store.mjs';
 
-export function createIntakeRoutes({app,directory,token,profile,allowedChatIds,bindings={},durableStorageConfirmed=false,forbiddenDirectories=[]}){
+export function createIntakeRoutes({app,directory,token,profile,allowedChatIds,bindings={},durableStorageConfirmed=false,forbiddenDirectories=[],intelligence={}}){
   if(!directory||!token||!durableStorageConfirmed)throw new GatewayError('intake_storage_and_auth_configuration_required',503);
   if(!path.isAbsolute(directory))throw new GatewayError('absolute_store_directory_required',503);
   fs.mkdirSync(directory,{recursive:true,mode:0o700});
   const actual=fs.realpathSync(directory);
   for(const root of forbiddenDirectories){const relative=path.relative(fs.realpathSync(root),actual);if(relative===''||(!relative.startsWith('..'+path.sep)&&relative!=='..'&&!path.isAbsolute(relative)))throw new GatewayError('private_store_directory_required',503);}
   const store=new IntakeStore({directory,profile,allowedChatIds,bindings});
+  const adapter=new IntelligenceAdapter(store,intelligence);
   const router=express.Router();
   router.use((req,res,next)=>{
     const provided=Buffer.from(req.get('authorization')??''),expected=Buffer.from('Bearer '+token);
@@ -37,11 +39,15 @@ export function createIntakeRoutes({app,directory,token,profile,allowedChatIds,b
   }));
   router.post('/jobs/:id/claim',perform(async(req,res)=>res.json({ok:true,...store.claim(req.params.id)})));
   router.post('/jobs/:id/complete',perform(async(req,res)=>res.json({ok:true,job:store.complete(req.params.id,req.body?.lease_token,req.body?.receipt)})));
+  router.get('/jobs/:id/intelligence',perform(async(req,res)=>{store.get(req.params.id);res.json({ok:true,...adapter.get(req.params.id)});}));
+  router.post('/jobs/:id/intelligence/prepare',perform(async(req,res)=>res.json({ok:true,...adapter.prepare(req.params.id)})));
+  router.post('/jobs/:id/intelligence/call',perform(async(req,res)=>res.json({ok:true,...adapter.authorizeCall(req.params.id)})));
+  router.post('/jobs/:id/intelligence/result',perform(async(req,res)=>res.json({ok:true,...adapter.recordResult(req.params.id,req.body?.call_token,req.body?.response)})));
   router.use((error,req,res,next)=>{
     if(res.headersSent)return next(error);
     const known=error instanceof GatewayError,isUpload=error instanceof multer.MulterError;
     res.status(known?error.status:isUpload?400:500).json({ok:false,error:known?error.code:isUpload?'source_upload_limit_or_field_invalid':'intake_internal_error',release_eligible:false});
   });
   app.use('/intake',router);
-  return {store,close:()=>store.close()};
+  return {store,adapter,close:()=>store.close()};
 }

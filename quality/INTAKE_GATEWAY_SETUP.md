@@ -137,6 +137,10 @@ intake credential when enabled, and retains the job after process restart.
 They do not certify live credentials, n8n import/runtime compatibility or end-to-end
 exactly-once paid generation. A downstream adapter must satisfy that contract.
 
+The source-aware intelligence adapter and inactive 03S export are now
+implemented locally; see `SOURCE_INTELLIGENCE_SETUP.md`. Bare-topic research
+and actual service bindings remain pending.
+
 After live gateway validation: complete trusted project/session adapters,
 bind the richer approved renderer to new manifests, approve final voice and
 evidence, then run topic/file-to-final-video and new-topic regression tests.
