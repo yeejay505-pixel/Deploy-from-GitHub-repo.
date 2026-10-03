@@ -1,35 +1,67 @@
-# Yeejay DXBinteract Browser Worker
+# Yeejay DXBinteract Verification Bridge
 
-Private browser-automation worker for Yeejay Listing OS / WF-02E.
+This branch contains two parts:
 
-## Endpoints
+1. Railway bridge/API used by n8n.
+2. Mac Local Chrome Agent used to browse DXBinteract with the user's normal visible Chrome session.
 
-- `GET /health` — public liveness check
-- `GET /session/status` — authenticated DXBinteract session check
-- `POST /verify-unit` — exact-property history verification
-- `POST /admin/reset-browser` — restart browser/context after selector or session changes
+## Railway bridge
 
-All endpoints except `/health` require `x-api-key: $WORKER_API_KEY`.
+Public service:
+`https://dxbinteract-worker-production.up.railway.app`
 
-## Required production variables
+n8n-facing endpoints:
+- `POST /jobs` — queue DISCOVER / SESSION_CHECK / VERIFY_UNIT
+- `GET /jobs/:id` — read job status/result
+- `GET /health` — service health
 
-- `WORKER_API_KEY`
-- `DXB_STORAGE_STATE_B64` — base64 Playwright storageState exported from an authorized DXBinteract session
+Local-agent endpoints:
+- `POST /agent/lease`
+- `POST /agent/result`
+- `GET /agent/status`
 
-## Optional variables
+n8n endpoints use header `x-api-key` with `WORKER_API_KEY`.
+Local-agent endpoints use header `x-agent-key` with `LOCAL_AGENT_KEY`.
 
-- `DXB_BASE_URL`
-- `DXB_HISTORY_URL`
-- `NAV_TIMEOUT_MS`
-- `PLAYWRIGHT_HEADLESS`
-- `DXB_SELECTOR_PROPERTY_TYPE`
-- `DXB_SELECTOR_PROJECT_INPUT`
-- `DXB_SELECTOR_UNIT_INPUT`
-- `DXB_SELECTOR_PROPERTY_NO_INPUT`
-- `DXB_SELECTOR_SEARCH_BUTTON`
-- `DXB_SELECTOR_RESULT_ROOT`
-- `DEBUG_SIGNATURE`
+## Mac setup
+
+Use a dedicated Chrome profile. Do not attach Playwright to your everyday Chrome profile.
+
+1. Clone/check out branch `dxbinteract-worker`.
+2. Run `npm install`.
+3. Copy `.env.local.example` to `.env.local`.
+4. In Railway, copy `LOCAL_AGENT_KEY` into `DXB_LOCAL_AGENT_KEY` in `.env.local`.
+5. Run:
+
+```bash
+chmod +x start-local-chrome.command
+./start-local-chrome.command
+```
+
+6. In the dedicated Chrome window, manually complete Cloudflare and RERA authentication on DXBinteract.
+7. Keep that Chrome window open.
+8. In a second Terminal window run:
+
+```bash
+npm run local-agent
+```
+
+The agent attaches only to Chrome at `127.0.0.1:9222` and polls Railway outbound. No inbound port is exposed from the Mac.
+
+## First test
+
+Queue a DISCOVER job from n8n:
+
+```json
+{
+  "action": "DISCOVER"
+}
+```
+
+Then poll `GET /jobs/{jobId}` until `status = COMPLETE`.
+
+The returned result contains the DXBinteract page title, URL, headings, and control metadata needed to finalize selectors.
 
 ## Safety behavior
 
-The worker never treats technical failure as evidence of no sale. Missing session, missing selectors, no exact property mapping, or ambiguous results return an explicit non-success state so WF-02E can HOLD the prospect.
+Technical failure is never interpreted as evidence of no sale. Cloudflare, login failure, selector mismatch, ambiguous unit matching, and missing property mapping all return non-success states so WF-02E can HOLD the prospect.
