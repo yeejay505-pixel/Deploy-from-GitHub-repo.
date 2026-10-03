@@ -1,10 +1,9 @@
-FROM node:22-bookworm-slim
-RUN apt-get update && apt-get install -y --no-install-recommends chromium ffmpeg fonts-dejavu-core ca-certificates libnss3 libatk1.0-0 libatk-bridge2.0-0 libcups2 libdrm2 libxkbcommon0 libxcomposite1 libxdamage1 libxfixes3 libxrandr2 libgbm1 libasound2 && rm -rf /var/lib/apt/lists/*
+FROM mcr.microsoft.com/playwright:v1.55.0-noble
 WORKDIR /app
-COPY package*.json ./
-RUN npm install
-COPY . .
+COPY package.json ./
+RUN npm install --omit=dev
+COPY server.mjs ./
 ENV PORT=8080
-ENV REMOTION_BROWSER_EXECUTABLE=/usr/bin/chromium
+ENV PLAYWRIGHT_HEADLESS=true
 EXPOSE 8080
-CMD ["node","server.mjs"]
+CMD ["npm","start"]
