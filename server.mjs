@@ -113,6 +113,11 @@ async function attemptLogin(page) {
   await page.goto(LOGIN_URL, { waitUntil: 'domcontentloaded', timeout: NAV_TIMEOUT_MS }).catch(() => {});
   await page.waitForTimeout(700);
 
+  const initialChallenge = await detectAccessChallenge(page);
+  if (initialChallenge.blocked) {
+    return { ok: false, status: initialChallenge.status, reason: initialChallenge.reason };
+  }
+
   if (DXB_RERA_NUMBER) {
     const rera = page.locator(
       'input[name*="rera" i], input[id*="rera" i], input[placeholder*="rera" i], input[aria-label*="rera" i]'
@@ -130,8 +135,8 @@ async function attemptLogin(page) {
       if (/otp|one[- ]time|verification code|two[- ]factor|2fa|mfa/.test(body)) {
         return { ok: false, status: 'MFA_REQUIRED', reason: 'INTERACTIVE_VERIFICATION_REQUIRED' };
       }
-      if (/captcha|verify you are human|cloudflare/.test(body)) {
-        return { ok: false, status: 'AUTH_REQUIRED', reason: 'CAPTCHA_REQUIRED' };
+      if (/captcha|verify you are human|cloudflare|just a moment|checking your browser|performing security verification/.test(body)) {
+        return { ok: false, status: 'AUTH_REQUIRED', reason: 'CLOUDFLARE_CHALLENGE' };
       }
 
       if (!(await looksLoggedOut(page))) {
@@ -168,8 +173,8 @@ async function attemptLogin(page) {
   if (/otp|one[- ]time|verification code|two[- ]factor|2fa|mfa/.test(body)) {
     return { ok: false, status: 'MFA_REQUIRED', reason: 'INTERACTIVE_VERIFICATION_REQUIRED' };
   }
-  if (/captcha|verify you are human|cloudflare/.test(body)) {
-    return { ok: false, status: 'AUTH_REQUIRED', reason: 'CAPTCHA_REQUIRED' };
+  if (/captcha|verify you are human|cloudflare|just a moment|checking your browser|performing security verification/.test(body)) {
+    return { ok: false, status: 'AUTH_REQUIRED', reason: 'CLOUDFLARE_CHALLENGE' };
   }
 
   const url = page.url().toLowerCase();
@@ -180,9 +185,26 @@ async function attemptLogin(page) {
   return { ok: true, status: 'OK', method: 'USERNAME_PASSWORD' };
 }
 
+async function detectAccessChallenge(page) {
+  const title = (await page.title().catch(() => '')).toLowerCase();
+  const body = (await page.locator('body').innerText().catch(() => '')).toLowerCase();
+
+  const cloudflare =
+    /just a moment|checking your browser|performing security verification|verify you are human|enable javascript and cookies|cloudflare/.test(title) ||
+    /just a moment|checking your browser|performing security verification|verify you are human|enable javascript and cookies|cloudflare/.test(body);
+
+  return cloudflare
+    ? { blocked: true, status: 'AUTH_REQUIRED', reason: 'CLOUDFLARE_CHALLENGE' }
+    : { blocked: false };
+}
+
 async function looksLoggedOut(page) {
+  const challenge = await detectAccessChallenge(page);
+  if (challenge.blocked) return true;
+
   const url = page.url().toLowerCase();
   if (/login|sign-in|signin|auth/.test(url)) return true;
+
   const body = (await page.locator('body').innerText().catch(() => '')).toLowerCase();
   return /sign in|log in|login to continue|please login/.test(body);
 }
@@ -489,6 +511,21 @@ app.get('/session/status', guard, async (_req, res) => {
       const page = await ctx.newPage();
       try {
         await page.goto(HISTORY_URL, { waitUntil: 'domcontentloaded', timeout: NAV_TIMEOUT_MS });
+
+        const challenge = await detectAccessChallenge(page);
+        if (challenge.blocked) {
+          return {
+            httpStatus: 403,
+            body: {
+              status: challenge.status,
+              reason: challenge.reason,
+              credentialsConfigured: Boolean(DXB_RERA_NUMBER || (DXB_USERNAME && DXB_PASSWORD)),
+              url: page.url(),
+              title: await page.title(),
+            },
+          };
+        }
+
         let loggedOut = await looksLoggedOut(page);
         if (loggedOut) {
           const login = await attemptLogin(page);
@@ -509,7 +546,7 @@ app.get('/session/status', guard, async (_req, res) => {
           httpStatus: loggedOut ? 401 : 200,
           body: {
             status: loggedOut ? 'SESSION_EXPIRED' : 'OK',
-            credentialsConfigured: Boolean(DXB_USERNAME && DXB_PASSWORD),
+            credentialsConfigured: Boolean(DXB_RERA_NUMBER || (DXB_USERNAME && DXB_PASSWORD)),
             url: page.url(),
             title: await page.title(),
           },
