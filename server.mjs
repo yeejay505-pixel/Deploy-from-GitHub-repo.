@@ -12,6 +12,9 @@ const BASE_URL = process.env.DXB_BASE_URL || 'https://dxbinteract.com';
 const HISTORY_URL = process.env.DXB_HISTORY_URL || `${BASE_URL}/dubai-property-prices`;
 const STORAGE_STATE_PATH = process.env.DXB_STORAGE_STATE_PATH || '/tmp/dxb-storage-state.json';
 const STORAGE_STATE_B64 = process.env.DXB_STORAGE_STATE_B64 || '';
+const DXB_USERNAME = process.env.DXB_USERNAME || '';
+const DXB_PASSWORD = process.env.DXB_PASSWORD || '';
+const LOGIN_URL = process.env.DXB_LOGIN_URL || BASE_URL;
 const HEADLESS = String(process.env.PLAYWRIGHT_HEADLESS ?? 'true').toLowerCase() !== 'false';
 const NAV_TIMEOUT_MS = Number(process.env.NAV_TIMEOUT_MS || 45000);
 
@@ -103,6 +106,50 @@ function computeSaleAfterSource(latestSaleDate, ownerSourceDate) {
   const source = parseDate(ownerSourceDate);
   if (!sale || !source) return 'Unknown';
   return sale > source ? 'Yes' : 'No';
+}
+
+async function attemptLogin(page) {
+  if (!DXB_USERNAME || !DXB_PASSWORD) {
+    return { ok: false, status: 'AUTH_REQUIRED', reason: 'DXB_USERNAME_OR_PASSWORD_MISSING' };
+  }
+
+  await page.goto(LOGIN_URL, { waitUntil: 'domcontentloaded', timeout: NAV_TIMEOUT_MS }).catch(() => {});
+  await page.waitForTimeout(700);
+
+  const email = page.locator('input[type="email"], input[name*="email" i], input[name*="user" i], input[autocomplete="username"]').first();
+  const password = page.locator('input[type="password"], input[autocomplete="current-password"]').first();
+
+  if (!(await email.count()) || !(await password.count())) {
+    return { ok: false, status: 'AUTH_REQUIRED', reason: 'LOGIN_FORM_NOT_FOUND' };
+  }
+
+  await email.fill(DXB_USERNAME);
+  await password.fill(DXB_PASSWORD);
+
+  const submit = page.getByRole('button', { name: /log in|login|sign in|continue/i }).first();
+  if (await submit.count()) {
+    await submit.click();
+  } else {
+    await password.press('Enter');
+  }
+
+  await page.waitForTimeout(1800);
+  await page.waitForLoadState('domcontentloaded').catch(() => {});
+
+  const body = (await page.locator('body').innerText().catch(() => '')).toLowerCase();
+  if (/otp|one[- ]time|verification code|two[- ]factor|2fa|mfa/.test(body)) {
+    return { ok: false, status: 'MFA_REQUIRED', reason: 'INTERACTIVE_VERIFICATION_REQUIRED' };
+  }
+  if (/captcha|verify you are human|cloudflare/.test(body)) {
+    return { ok: false, status: 'AUTH_REQUIRED', reason: 'CAPTCHA_REQUIRED' };
+  }
+
+  const url = page.url().toLowerCase();
+  if (/login|sign-in|signin|auth/.test(url)) {
+    return { ok: false, status: 'AUTH_REQUIRED', reason: 'LOGIN_FAILED_OR_FORM_CHANGED' };
+  }
+
+  return { ok: true, status: 'OK' };
 }
 
 async function looksLoggedOut(page) {
@@ -268,18 +315,6 @@ async function verifyUnit(payload) {
     return { httpStatus: 400, body: { status: 'INVALID_INPUT', required: ['building', 'unitNumber'] } };
   }
 
-  if (!STORAGE_STATE_B64) {
-    return {
-      httpStatus: 409,
-      body: {
-        status: 'AUTH_REQUIRED',
-        authSessionStatus: 'AUTH_REQUIRED',
-        sourceStatus: 'SOURCE_UNAVAILABLE',
-        nextAction: 'Set DXB_STORAGE_STATE_B64 in Railway with an authenticated DXBinteract Playwright storageState.',
-      },
-    };
-  }
-
   const ctx = await getContext();
   const page = await ctx.newPage();
   try {
@@ -287,7 +322,20 @@ async function verifyUnit(payload) {
     await page.waitForTimeout(1000);
 
     if (await looksLoggedOut(page)) {
-      return { httpStatus: 401, body: { status: 'SESSION_EXPIRED', authSessionStatus: 'SESSION_EXPIRED', sourceStatus: 'SOURCE_UNAVAILABLE' } };
+      const login = await attemptLogin(page);
+      if (!login.ok) {
+        return {
+          httpStatus: login.status === 'MFA_REQUIRED' ? 409 : 401,
+          body: {
+            status: login.status,
+            authSessionStatus: login.status,
+            sourceStatus: 'SOURCE_UNAVAILABLE',
+            reason: login.reason,
+          },
+        };
+      }
+      await page.goto(HISTORY_URL, { waitUntil: 'domcontentloaded', timeout: NAV_TIMEOUT_MS });
+      await page.waitForTimeout(700);
     }
 
     await maybeSelectPropertyType(page, payload.propertyType || 'Apartment');
@@ -401,6 +449,7 @@ app.get('/health', (_req, res) => {
     service: 'yeejay-dxbinteract-worker',
     version: '0.1.0',
     sessionConfigured: Boolean(STORAGE_STATE_B64),
+    credentialsConfigured: Boolean(DXB_USERNAME && DXB_PASSWORD),
     selectorConfig: Object.fromEntries(Object.entries(SEL).map(([k, v]) => [k, Boolean(v)])),
   });
 });
@@ -408,13 +457,35 @@ app.get('/health', (_req, res) => {
 app.get('/session/status', guard, async (_req, res) => {
   try {
     const result = await serial(async () => {
-      if (!STORAGE_STATE_B64) return { httpStatus: 409, body: { status: 'AUTH_REQUIRED', sessionConfigured: false } };
       const ctx = await getContext();
       const page = await ctx.newPage();
       try {
         await page.goto(HISTORY_URL, { waitUntil: 'domcontentloaded', timeout: NAV_TIMEOUT_MS });
-        const loggedOut = await looksLoggedOut(page);
-        return { httpStatus: loggedOut ? 401 : 200, body: { status: loggedOut ? 'SESSION_EXPIRED' : 'OK', sessionConfigured: true, url: page.url(), title: await page.title() } };
+        let loggedOut = await looksLoggedOut(page);
+        if (loggedOut) {
+          const login = await attemptLogin(page);
+          if (!login.ok) {
+            return {
+              httpStatus: login.status === 'MFA_REQUIRED' ? 409 : 401,
+              body: {
+                status: login.status,
+                reason: login.reason,
+                credentialsConfigured: Boolean(DXB_USERNAME && DXB_PASSWORD),
+              },
+            };
+          }
+          await page.goto(HISTORY_URL, { waitUntil: 'domcontentloaded', timeout: NAV_TIMEOUT_MS });
+          loggedOut = await looksLoggedOut(page);
+        }
+        return {
+          httpStatus: loggedOut ? 401 : 200,
+          body: {
+            status: loggedOut ? 'SESSION_EXPIRED' : 'OK',
+            credentialsConfigured: Boolean(DXB_USERNAME && DXB_PASSWORD),
+            url: page.url(),
+            title: await page.title(),
+          },
+        };
       } finally {
         await page.close().catch(() => {});
       }
