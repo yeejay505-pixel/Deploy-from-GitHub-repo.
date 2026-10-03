@@ -1,5 +1,6 @@
 // Presenter-led review composition. All numbers and event timing come from the local JSON plan.
 import {pitchState,pitchPrimitives,clamp} from './investor-pitch.mjs';
+import {drawUploadedScriptScene} from './uploaded-script-scenes.mjs';
 const G=pitchPrimitives;
 const C={white:'#FFFFFF',ink:'#173A32',green:'#286650',mint:'#DCEDE2',teal:'#319A9D',pale:'#EDF6F4',copper:'#B37B45',sand:'#F2E8D6',line:'#CDDCD4',muted:'#687C72',red:'#AA6557'};
 const mix=(a,b,p)=>a+(b-a)*p;
@@ -33,13 +34,14 @@ export function drawPresenterPitch(c,plan,t,assets,{width=1080,height=1920}={}){
  // Soft edge texture and a consistent three-part chapter rail make the argument navigable.
  const bg=c.createRadialGradient(480,920,40,480,920,740);bg.addColorStop(0,'#F4F8F3');bg.addColorStop(1,C.white);c.fillStyle=bg;c.fillRect(0,430,1080,1220);
  tx(c,'YEEJAY',76,104,25,C.green,700);tx(c,'THE INVESTOR CASE',1002,104,19,C.muted,500,'right');
- const phase=t<31.77?0:t<53.83?1:2;
+ const phase=plan.narrativePhases?.find(x=>t>=x.start&&t<x.end)?.index??(t<31.77?0:t<53.83?1:2);
  for(let i=0;i<3;i++){line(c,76+i*313,149,349+i*313,149,i<=phase?C.green:C.line,5);tx(c,['01  PROBLEM','02  MECHANISM','03  CONSEQUENCE'][i],76+i*313,188,17,i===phase?C.green:C.muted,i===phase?700:500);}
  const heads={opening:['Business grows.','Space takes time.'],business:['Growth needs','somewhere to work.'],evidence:['Demand has','measurable momentum.'],constraint:['Demand moves fast.','Supply takes years.'],entry:['Position during','the build.'],quality:['Make the space','work for businesses.'],lease:['From workspace','to contracted income.'],costs:['What comes in','isn’t what remains.'],capital:['Count all the','capital you commit.'],yield:['Make the net','numbers work.'],risk:['Three gates','before the return.'],close:['The opportunity','is the mechanism.']};
- a(c,intro,()=>heads[id].forEach((h,i)=>{let size=70;c.font=`700 ${size}px "DejaVu Sans"`;while(c.measureText(h).width>932&&size>42){size-=2;c.font=`700 ${size}px "DejaVu Sans"`;}tx(c,h,76,295+i*83+8*(1-intro),size,i?C.green:C.ink,700);}));
+ a(c,intro,()=>(plan.sceneHeadings?.[id]??heads[id]).forEach((h,i)=>{let size=70;c.font=`700 ${size}px "DejaVu Sans"`;while(c.measureText(h).width>932&&size>42){size-=2;c.font=`700 ${size}px "DejaVu Sans"`;}tx(c,h,76,295+i*83+8*(1-intro),size,i?C.green:C.ink,700);}));
  // Asset geometry and occupants reuse the same persistent identities throughout the film.
  c.save();c.translate(0,-120);
- if(id==='opening'){
+ const custom=plan.variant==='uploaded-script-v4'&&drawUploadedScriptScene(c,plan,t,state,{C,G,mix,ease,a,box,circle,line,arrow,tx,badge,check,doc,briefcase,office,shop,icon,ribbon},assets);
+ if(custom){}else if(id==='opening'){
   const demand=p('demand-growth');G.building(c,735,1160,.73,1,.63,0);badge(c,'SUITABLE SPACE',610,1230,277);tx(c,'BUSINESS DEMAND',105,635,25,C.green,700);
   briefcase(c,165,790,.85);arrow(c,220,790,460,790,demand,C.teal,5);
   // Growing queue, then bottleneck: no numerical market claim is encoded by these tokens.
@@ -78,7 +80,7 @@ export function drawPresenterPitch(c,plan,t,assets,{width=1080,height=1920}={}){
  }else if(id==='quality'){
   const asset=O.get('asset-main'),f=O.get('floor-main');G.building(c,asset.x,asset.y,asset.scale,1,.8,1-f.open);
   a(c,f.opacity,()=>G.floor(c,mix(asset.x,515,f.open),mix(asset.y-270*asset.scale,995,f.open),mix(asset.scale,1.05,f.open),f.open,f.occupied));
-  const spec=p('grade-specifications');a(c,spec,()=>{icon(c,'access',530,637,.95);tx(c,'ACCESS',530,695,22,C.green,700,'center');icon(c,'services',825,637,.95);tx(c,'SERVICES',825,695,22,C.green,700,'center');arrow(c,530,725,530,777,1,C.teal,3);arrow(c,825,725,780,777,1,C.teal,3);badge(c,'GRADE A',335,1285,177);});
+  const spec=p('grade-specifications');a(c,spec,()=>{icon(c,'access',530,637,.95);tx(c,'ACCESS',530,695,22,C.green,700,'center');icon(c,'services',825,637,.95);tx(c,'SERVICES',825,695,22,C.green,700,'center');arrow(c,530,725,530,777,1,C.teal,3);arrow(c,825,725,780,777,1,C.teal,3);badge(c,plan.variant==='uploaded-script-v4'?'USABLE SPACE':'GRADE A',335,1285,plan.variant==='uploaded-script-v4'?218:177);});
   ribbon(c,'Usability wins the tenant.',76,1450,611,Math.max(f.open,spec));
  }else if(id==='lease'){
   const asset=O.get('asset-main'),lease=O.get('lease-main');G.building(c,asset.x,asset.y,asset.scale,1,.87,0);G.lease(c,735,761,.82,lease.opacity);
@@ -120,7 +122,7 @@ export function drawPresenterPitch(c,plan,t,assets,{width=1080,height=1920}={}){
  c.restore();
  const presenterBounds=presenter(c,plan,t,assets);caption(c,plan,t);
  line(c,76,1783,1002,1783,C.line,1);
- const foot=id==='evidence'?'JLL · Q2 2026 · Registrations, not rent growth':id==='capital'||id==='yield'?'ILLUSTRATIVE · Excludes fees, VAT funding and debt':id==='costs'?'Conceptual flow · No cost proportions implied':'Supplied slides 4–14 · Conceptual graphics';
+ const foot=plan.sceneFootnotes?.[id]??plan.defaultFootnote??(id==='evidence'?'JLL · Q2 2026 · Registrations, not rent growth':id==='capital'||id==='yield'?'ILLUSTRATIVE · Excludes fees, VAT funding and debt':id==='costs'?'Conceptual flow · No cost proportions implied':'Supplied slides 4–14 · Conceptual graphics');
  tx(c,foot,76,1824,20,C.muted,500);tx(c,'GUIDE VOICE · CREATIVE REVIEW',76,1865,16,C.muted,500);
  c.restore();return {...state,presenterBounds,presenter:presenterFrame(plan,t)};
 }

@@ -34,18 +34,18 @@ function building(c,x,y,scale,build=1,occupied=.65,selected=0){
 function desk(c,x,y){rect(c,x-27,y-18,54,36,4,'#F2EEE5',P.copper);rect(c,x-13,y-11,26,16,2,'#739086');line(c,x-5,y+8,x+5,y+8,P.green,2);rect(c,x-13,y+26,26,15,6,'#B8CBBB',P.green);}
 export function tenantRoute(index){const x=-319+index%4*110,y=index<4?-104:79;return index<4?[[-218,188],[-218,115],[-172,115],[-172,-88],[x,y]]:[[-218,188],[-218,115],[x,115],[x,y]];}
 export function sampleTenantRoute(index,progress){const points=tenantRoute(index),lengths=points.slice(1).map((p,i)=>Math.hypot(p[0]-points[i][0],p[1]-points[i][1]));let d=clamp(progress)*lengths.reduce((a,b)=>a+b,0);for(let i=0;i<lengths.length;i++){if(d<=lengths[i]||i===lengths.length-1){const p=clamp(d/lengths[i]);return {x:lerp(points[i][0],points[i+1][0],p),y:lerp(points[i][1],points[i+1][1],p),settled:progress>=1};}d-=lengths[i];}}
-function floor(c,x,y,scale,open,occupied=0){
+function floor(c,x,y,scale,open,occupied=0,fitout=1){
  c.save();c.translate(x,y);c.scale(scale,scale);const cornersA=[[-200,-70],[200,-70],[200,-20],[-200,-20]],cornersB=[[-400,-245],[400,-245],[400,230],[-400,230]],pts=cornersA.map((p,i)=>p.map((v,j)=>lerp(v,cornersB[i][j],open)));
  c.save();shadow(c);poly(c,pts,'#F4F6F1',P.green,3);c.restore();
  alpha(c,STEP(open,.65,1),()=>{
   // Walls, corridor, desks and occupants all use one plan coordinate system.
   rect(c,-398,140,796,88,0,'#E8EEE6');line(c,-397,138,-245,138,P.green,5);line(c,-191,138,126,138,P.green,5);line(c,181,138,398,138,P.green,5);
   line(c,100,-243,100,139,P.green,5);line(c,-398,-68,-194,-68,P.green,5);line(c,-148,-68,99,-68,P.green,5);line(c,-194,-68,-194,-98,P.copper,3);rect(c,116,-226,264,210,4,'#EBF0E8');
-  rect(c,155,-169,190,64,22,'#D9D1BF',P.copper);for(let i=0;i<4;i++){rect(c,170+i*42,-192,26,15,5,P.sage,P.green);rect(c,170+i*42,-94,26,15,5,P.sage,P.green);}
+  alpha(c,fitout,()=>{rect(c,155,-169,190,64,22,'#D9D1BF',P.copper);for(let i=0;i<4;i++){rect(c,170+i*42,-192,26,15,5,P.sage,P.green);rect(c,170+i*42,-94,26,15,5,P.sage,P.green);}});
   text(c,'MEETING',250,-40,19,P.muted,500,'center');
-  for(let i=0;i<8;i++){const xx=-319+i%4*110,yy=i<4?-146:37;desk(c,xx,yy);const progress=clamp(occupied*8-i);if(progress>0){const pos=sampleTenantRoute(i,progress);alpha(c,clamp(progress*8),()=>person(c,pos.x,pos.y,.45));}}
-  rect(c,132,32,240,62,8,'#D9E5DB',P.green);text(c,'RECEPTION',250,72,18,P.green,500,'center');text(c,'ACCESS',0,195,20,P.muted,500,'center');
-  tree(c,363,119,.25);tree(c,-353,113,.25);
+  for(let i=0;i<8;i++){const xx=-319+i%4*110,yy=i<4?-146:37;alpha(c,clamp(fitout*8-i),()=>desk(c,xx,yy));const progress=clamp(occupied*8-i);if(progress>0){const pos=sampleTenantRoute(i,progress);alpha(c,clamp(progress*8),()=>person(c,pos.x,pos.y,.45));}}
+  alpha(c,fitout,()=>rect(c,132,32,240,62,8,'#D9E5DB',P.green));text(c,'RECEPTION',250,72,18,P.green,500,'center');text(c,'ACCESS',0,195,20,P.muted,500,'center');
+  alpha(c,fitout,()=>{tree(c,363,119,.25);tree(c,-353,113,.25);});
   // A clear doorway remains between the access corridor and each occupied room.
   line(c,-245,138,-245,98,P.copper,3);line(c,126,138,126,98,P.copper,3);
  });c.restore();
