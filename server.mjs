@@ -77,6 +77,16 @@ function normalizeScene(raw={}){
 }
 
 app.use(express.json({limit:'12mb'}));
+// Opt-in intake API, registered before renderer authentication so it can use
+// its own credential. Existing renderer routes and startup remain unchanged.
+if(process.env.INTAKE_STORE_DIR){
+  const {createIntakeRoutes}=await import('./intake/gateway-routes.mjs');
+  const profile=JSON.parse(await fs.readFile(path.join(here,'quality/approved-visual-reference.json'),'utf8'));
+  const bindings=process.env.INTAKE_BINDINGS_FILE?JSON.parse(await fs.readFile(process.env.INTAKE_BINDINGS_FILE,'utf8')):{};
+  createIntakeRoutes({app,directory:process.env.INTAKE_STORE_DIR,token:process.env.INTAKE_TOKEN,
+    profile,bindings,allowedChatIds:JSON.parse(process.env.INTAKE_ALLOWED_CHAT_IDS||'["8580375575"]'),
+    durableStorageConfirmed:process.env.INTAKE_DURABLE_STORAGE_CONFIRMED==='1',forbiddenDirectories:[here]});
+}
 app.use('/outputs',express.static(outputs));
 app.use('/render-assets',express.static(stagedRoot));
 

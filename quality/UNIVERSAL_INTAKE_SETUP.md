@@ -40,7 +40,13 @@ send Telegram messages or install a second webhook. Its optional dispatch
 node has no gateway ID configured. A handoff is not a completed render or a
 publication approval.
 
-## Live gateway contract — still pending
+## Gateway implementation and remaining live contract
+
+Atomic request/source storage, bounded text extraction, lease reservation and
+receipt handling are now implemented locally with an inactive 00G export.
+See `INTAKE_GATEWAY_SETUP.md`. They are not deployed or live-bound. Trusted
+project/session adapters, semantic intelligence and renderer production gates
+remain pending. The checklist below defines the full live contract.
 
 The bound gateway must be a tested sub-workflow, with **When Executed by
 Another Workflow / Accept all data** and access restricted to the ingress.
