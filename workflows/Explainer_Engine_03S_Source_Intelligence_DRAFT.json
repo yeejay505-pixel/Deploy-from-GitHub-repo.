@@ -49,7 +49,7 @@
         120
       ],
       "parameters": {
-        "jsCode": "const items=$input.all();if(items.length!==1)throw Error('One handoff per execution required.');return items.map(i=>({json:{handoff:i.json,event_id:i.json.idempotency_key,config:{\"enabled\":false,\"base_url\":\"https://REPLACE_WITH_EXISTING_RENDERER_HOST\"}}}));"
+        "jsCode": "const items=$input.all();if(items.length!==1)throw Error('One handoff per execution required.');return items.map(i=>({json:{handoff:i.json,event_id:i.json.idempotency_key,config:{\"enabled\":false,\"base_url\":\"https://REPLACE_WITH_EXISTING_RENDERER_HOST\",\"render_enabled\":false,\"render_workflow_id\":\"\"}}}));"
       }
     },
     {
@@ -284,6 +284,89 @@
       }
     },
     {
+      "id": "durable-render-bound",
+      "name": "Durable Render Bound",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        2640,
+        -200
+      ],
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 2
+          },
+          "conditions": [
+            {
+              "id": "Durable Render Bound",
+              "leftValue": "={{ $json.status === 'validated_draft' && $items('Check Adapter Configuration')[0].json.config.render_enabled === true }}",
+              "rightValue": true,
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      }
+    },
+    {
+      "id": "prepare-render-handoff",
+      "name": "Prepare Render Handoff",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        2860,
+        -300
+      ],
+      "parameters": {
+        "jsCode": "const r=$input.first().json,c=$items('Check Adapter Configuration')[0].json.config;if(!/^[A-Za-z0-9_-]+$/.test(c.render_workflow_id)||/REPLACE|PLACEHOLDER/i.test(c.render_workflow_id)||r.receipt?.schema_version!=='intake-receipt.v1')throw Error('Verified 04R workflow ID and stored receipt required.');return [{json:{...r.receipt,workflow_id:c.render_workflow_id}}];"
+      }
+    },
+    {
+      "id": "execute-durable-review-render",
+      "name": "Execute Durable Review Render",
+      "type": "n8n-nodes-base.executeWorkflow",
+      "typeVersion": 1.2,
+      "position": [
+        3080,
+        -300
+      ],
+      "parameters": {
+        "workflowId": {
+          "__rl": true,
+          "value": "={{ $json.workflow_id }}",
+          "mode": "id"
+        },
+        "mode": "each",
+        "options": {
+          "waitForSubWorkflow": false
+        }
+      },
+      "onError": "continueRegularOutput",
+      "retryOnFail": false
+    },
+    {
+      "id": "restore-intelligence-receipt",
+      "name": "Restore Intelligence Receipt",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        3300,
+        -300
+      ],
+      "parameters": {
+        "jsCode": "const stored=$items('Prepare Render Handoff')[0].json,render=$input.first().json;return [{json:{render_handoff:render,receipt:Object.fromEntries(Object.entries(stored).filter(([k])=>k!=='workflow_id')),release_eligible:false}}];"
+      }
+    },
+    {
       "id": "return-stored-receipt-or-review",
       "name": "Return Stored Receipt Or Review",
       "type": "n8n-nodes-base.code",
@@ -308,7 +391,7 @@
       "parameters": {
         "height": 410,
         "width": 1100,
-        "content": "## Workflow 03S — Source-aware intelligence — DRAFT\nInactive; enabled=false. Manual run is offline and does not invent a success receipt.\n\nUse the existing engine, not the separate V2.0 project. Deploy the reviewed intake API first. Configure a server-side INTAKE_INTELLIGENCE_MODEL, then verify your existing OpenAI credential. INTAKE_INTELLIGENCE_PAID_ENABLED must be explicitly enabled before the server permits one model call.\n\nBind Header Auth to Prepare, Reserve and Store nodes; bind OpenAI credential only to OpenAI Draft Source Plan. No secrets or model guesses are in this export.\n\nThe server loads actual retained sources by event ID, preserves claim IDs / quotes / locations, validates the narrative and all sentence visual fields, and returns a stored receipt only after a valid draft. Free topics without source evidence require research. A missing, refused or invalid model response stops for review; no automatic paid retry.\n\nThe output is a review-pending intelligence draft, not measured scene timing, approved voice or a publishable render. Read quality/SOURCE_INTELLIGENCE_SETUP.md before binding the actual imported workflow ID in the gateway."
+        "content": "## Workflow 03S — Source-aware intelligence — DRAFT\nInactive; enabled=false. Manual run is offline and does not invent a success receipt.\n\nUse the existing engine, not the separate V2.0 project. Deploy the reviewed intake API first. Configure a server-side INTAKE_INTELLIGENCE_MODEL, then verify your existing OpenAI credential. INTAKE_INTELLIGENCE_PAID_ENABLED must be explicitly enabled before the server permits one model call.\n\nBind Header Auth to Prepare, Reserve and Store nodes; bind OpenAI credential only to OpenAI Draft Source Plan. No secrets or model guesses are in this export.\n\nThe server loads actual retained sources by event ID, preserves claim IDs / quotes / locations, validates the narrative and all sentence visual fields, and returns a stored receipt only after a valid draft. Free topics without source evidence require research. A missing, refused or invalid model response stops for review; no automatic paid retry.\n\nThe output is a review-pending intelligence draft, not measured scene timing, approved voice or a publishable render. Optional render_enabled=false and render_workflow_id are unbound. After testing, bind the imported 04R ID; dispatch is asynchronous so gateway receipts do not wait for rendering. Read quality/DURABLE_SOURCE_RENDER_SETUP.md and quality/SOURCE_INTELLIGENCE_SETUP.md before binding the actual imported workflow ID in the gateway."
       }
     }
   ],
@@ -408,7 +491,7 @@
         ],
         [
           {
-            "node": "Return Stored Receipt Or Review",
+            "node": "Durable Render Bound",
             "type": "main",
             "index": 0
           }
@@ -467,6 +550,57 @@
       ]
     },
     "Validate And Store Draft": {
+      "main": [
+        [
+          {
+            "node": "Durable Render Bound",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Durable Render Bound": {
+      "main": [
+        [
+          {
+            "node": "Prepare Render Handoff",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Return Stored Receipt Or Review",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Prepare Render Handoff": {
+      "main": [
+        [
+          {
+            "node": "Execute Durable Review Render",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Execute Durable Review Render": {
+      "main": [
+        [
+          {
+            "node": "Restore Intelligence Receipt",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Restore Intelligence Receipt": {
       "main": [
         [
           {
