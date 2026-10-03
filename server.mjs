@@ -1,627 +1,452 @@
 import express from 'express';
-import path from 'node:path';
+import { chromium } from 'playwright';
 import fs from 'node:fs/promises';
-import {fileURLToPath} from 'node:url';
-import {bundle} from '@remotion/bundler';
-import {renderFrames,selectComposition} from '@remotion/renderer';
-import {spawn} from 'node:child_process';
-import multer from 'multer';
-import {createAssemblyHandler} from './assembly.mjs';
-import {createPremiumAssemblyHandler} from './premium-assembly.mjs';
 
-const here=path.dirname(fileURLToPath(import.meta.url));
-const outputs=path.join(here,'outputs');
-const uploads=path.join(here,'uploads');
-const frameRoot=path.join(here,'frame-cache');
-const stagedRoot=path.join(here,'staged-media');
-await fs.mkdir(outputs,{recursive:true});
-await fs.mkdir(uploads,{recursive:true});
-await fs.mkdir(frameRoot,{recursive:true});
-await fs.mkdir(stagedRoot,{recursive:true});
+const app = express();
+app.set('trust proxy', 1);
+app.use(express.json({ limit: '2mb' }));
 
-const app=express();
-app.set('trust proxy',1);
-const PORT=Number(process.env.PORT||8080);
-const TOKEN=process.env.RENDER_TOKEN||'';
-let bundlePromise=null;
-let queue=Promise.resolve();
-const upload=multer({dest:uploads});
+const PORT = Number(process.env.PORT || 8080);
+const API_KEY = process.env.WORKER_API_KEY || '';
+const BASE_URL = process.env.DXB_BASE_URL || 'https://dxbinteract.com';
+const HISTORY_URL = process.env.DXB_HISTORY_URL || `${BASE_URL}/dubai-property-prices`;
+const STORAGE_STATE_PATH = process.env.DXB_STORAGE_STATE_PATH || '/tmp/dxb-storage-state.json';
+const STORAGE_STATE_B64 = process.env.DXB_STORAGE_STATE_B64 || '';
+const HEADLESS = String(process.env.PLAYWRIGHT_HEADLESS ?? 'true').toLowerCase() !== 'false';
+const NAV_TIMEOUT_MS = Number(process.env.NAV_TIMEOUT_MS || 45000);
 
-const getBundle=()=>bundlePromise??=bundle({entryPoint:path.join(here,'src/index.jsx')});
+const SEL = {
+  propertyType: process.env.DXB_SELECTOR_PROPERTY_TYPE || '',
+  projectInput: process.env.DXB_SELECTOR_PROJECT_INPUT || '',
+  unitInput: process.env.DXB_SELECTOR_UNIT_INPUT || '',
+  propertyNoInput: process.env.DXB_SELECTOR_PROPERTY_NO_INPUT || '',
+  searchButton: process.env.DXB_SELECTOR_SEARCH_BUTTON || '',
+  resultRoot: process.env.DXB_SELECTOR_RESULT_ROOT || '',
+};
 
-function num(v,fallback=0){
-  const n=Number(v);
-  return Number.isFinite(n)?n:fallback;
-}
+let browser = null;
+let context = null;
+let queue = Promise.resolve();
 
-function normalizeScene(raw={}){
-  const timing=raw.timing||{};
-  const start=num(raw.start_sec ?? timing.start_sec,0);
-  const duration=num(raw.duration_sec ?? timing.duration_sec,1);
-  const end=num(raw.end_sec ?? timing.end_sec,start+duration);
-
-  const components=(raw.components||[]).map((c)=>{
-    const p=c.parameter_plan||{};
-    const cs=num(c.start_sec ?? p.start_sec,start);
-    const cd=num(c.duration_sec ?? p.duration_sec,1);
-    const ce=num(c.end_sec ?? p.end_sec,cs+cd);
-    const text=c.on_screen_text ?? p.on_screen_text ?? [];
-    let data=c.data ?? p.data ?? undefined;
-
-    if(!data && c.component_id==='D3_BAR_REVEAL'){
-      const joined=Array.isArray(text)?text.join(' '):String(text||'');
-      const m=joined.match(/\$?([0-9]+(?:\.[0-9]+)?)B/i);
-      const value=m?Number(m[1]):0;
-      data={value};
-      if(/2009/.test(joined)) data.previous=5.07;
-    }
-
-    return {
-      ...c,
-      start_sec:cs,
-      end_sec:ce,
-      duration_sec:cd,
-      narration:c.narration ?? p.narration ?? '',
-      visual_type:c.visual_type ?? p.visual_type ?? '',
-      visual_concept:c.visual_concept ?? p.visual_concept ?? '',
-      on_screen_text:text,
-      emphasis_words:c.emphasis_words ?? p.emphasis_words ?? [],
-      motion_notes:c.motion_notes ?? p.motion_notes ?? '',
-      sfx_cues:c.sfx_cues ?? p.sfx_cues ?? [],
-      data
-    };
-  });
-
-  return {...raw,start_sec:start,end_sec:end,duration_sec:duration,components};
-}
-
-app.use(express.json({limit:'12mb'}));
-app.use('/outputs',express.static(outputs));
-app.use('/render-assets',express.static(stagedRoot));
-
-app.use((req,res,next)=>{
-  if(!TOKEN||req.path==='/health')return next();
-  if((req.get('authorization')||'')!==`Bearer ${TOKEN}`) return res.status(401).json({ok:false,error:'Unauthorized'});
+function guard(req, res, next) {
+  if (!API_KEY) {
+    return res.status(503).json({ status: 'CONFIG_ERROR', code: 'WORKER_API_KEY_MISSING' });
+  }
+  if (req.get('x-api-key') !== API_KEY) {
+    return res.status(401).json({ status: 'UNAUTHORIZED' });
+  }
   next();
-});
+}
 
-app.get('/health',async(req,res)=>{
-  let memoryMax=null;
-  try{memoryMax=(await fs.readFile('/sys/fs/cgroup/memory.max','utf8')).trim();}catch{}
-  res.json({
-    ok:true,
-    service:'explainer-render-worker',
-    version:'0.15.0',
-    renderProfile:'universal-media-aware-1080x1920+preview+final-assembly',
-    strategy:'staged-media+renderFrames-system-ffmpeg+sequential-scene-rendering',
-    memoryMax,
-    heapMb:Math.round(process.memoryUsage().heapUsed/1024/1024)
+async function ensureStorageStateFile() {
+  if (!STORAGE_STATE_B64) return null;
+  try {
+    const decoded = Buffer.from(STORAGE_STATE_B64, 'base64').toString('utf8');
+    JSON.parse(decoded);
+    await fs.writeFile(STORAGE_STATE_PATH, decoded, 'utf8');
+    return STORAGE_STATE_PATH;
+  } catch (error) {
+    throw new Error(`INVALID_DXB_STORAGE_STATE_B64: ${error.message}`);
+  }
+}
+
+async function resetBrowser() {
+  try { await context?.close(); } catch {}
+  try { await browser?.close(); } catch {}
+  context = null;
+  browser = null;
+}
+
+async function getContext() {
+  if (context) return context;
+  browser = await chromium.launch({
+    headless: HEADLESS,
+    args: ['--no-sandbox', '--disable-dev-shm-usage'],
   });
-});
 
-async function renderOne(body,req){
-  const started=Date.now();
-  const {projectId,buildVersion,renderBatchId}=body||{};
-  const scene=normalizeScene(body?.scene||{});
+  const storageStatePath = await ensureStorageStateFile();
+  context = await browser.newContext({
+    storageState: storageStatePath || undefined,
+    viewport: { width: 1440, height: 1100 },
+    locale: 'en-US',
+    userAgent: process.env.DXB_USER_AGENT || undefined,
+  });
 
-  if(!scene.scene_id) throw new Error('Missing scene.scene_id');
-  if(!scene.components.length) throw new Error(`Scene ${scene.scene_id} has no components`);
+  context.setDefaultTimeout(NAV_TIMEOUT_MS);
+  return context;
+}
 
-  const serveUrl=await getBundle();
-  const inputProps={scene};
-  const composition=await selectComposition({serveUrl,id:'Scene',inputProps});
+function serial(fn) {
+  const run = queue.then(fn, fn);
+  queue = run.catch(() => {});
+  return run;
+}
 
-  const safeProject=String(projectId||'project').replace(/[^A-Za-z0-9_-]/g,'_');
-  const safeBatch=String(renderBatchId||'batch').replace(/[^A-Za-z0-9_-]/g,'_');
-  const fileName=`${safeProject}_${safeBatch}_${scene.scene_id}.mp4`;
-  const outputLocation=path.join(outputs,fileName);
-  const frameDir=path.join(frameRoot,`${safeProject}_${safeBatch}_${scene.scene_id}`);
-  const scale=0.5;
-  const width=Math.round(composition.width*scale);
-  const height=Math.round(composition.height*scale);
+function normalizeText(v) {
+  return String(v ?? '').replace(/\s+/g, ' ').trim();
+}
 
-  await fs.rm(frameDir,{recursive:true,force:true});
-  await fs.mkdir(frameDir,{recursive:true});
+function parseNumber(v) {
+  if (v === null || v === undefined) return null;
+  const n = Number(String(v).replace(/[^0-9.-]/g, ''));
+  return Number.isFinite(n) ? n : null;
+}
 
-  try{
-    const {assetsInfo}=await renderFrames({
-      composition,
-      serveUrl,
-      outputDir:frameDir,
-      inputProps,
-      imageFormat:'jpeg',
-      jpegQuality:68,
-      scale,
-      concurrency:1,
-      muted:true,
-      logLevel:'warn',
-      browserExecutable:process.env.REMOTION_BROWSER_EXECUTABLE||undefined,
-      chromiumOptions:{enableMultiProcessOnLinux:false}
+function parseDate(v) {
+  if (!v) return null;
+  const d = new Date(v);
+  return Number.isNaN(d.getTime()) ? null : d;
+}
+
+function computeSaleAfterSource(latestSaleDate, ownerSourceDate) {
+  const sale = parseDate(latestSaleDate);
+  const source = parseDate(ownerSourceDate);
+  if (!sale || !source) return 'Unknown';
+  return sale > source ? 'Yes' : 'No';
+}
+
+async function looksLoggedOut(page) {
+  const url = page.url().toLowerCase();
+  if (/login|sign-in|signin|auth/.test(url)) return true;
+  const body = (await page.locator('body').innerText().catch(() => '')).toLowerCase();
+  return /sign in|log in|login to continue|please login/.test(body);
+}
+
+async function pageSignature(page) {
+  const controls = await page.locator('input,button,select,textarea').evaluateAll((els) =>
+    els.slice(0, 120).map((el) => ({
+      tag: el.tagName.toLowerCase(),
+      type: el.getAttribute('type'),
+      name: el.getAttribute('name'),
+      id: el.id || null,
+      placeholder: el.getAttribute('placeholder'),
+      ariaLabel: el.getAttribute('aria-label'),
+      text: (el.innerText || el.textContent || '').trim().slice(0, 140),
+    }))
+  );
+  return {
+    url: page.url(),
+    title: await page.title(),
+    controls,
+  };
+}
+
+async function maybeSelectPropertyType(page, propertyType = 'Apartment') {
+  if (SEL.propertyType) {
+    const loc = page.locator(SEL.propertyType).first();
+    const tag = await loc.evaluate((el) => el.tagName.toLowerCase()).catch(() => '');
+    if (tag === 'select') await loc.selectOption({ label: propertyType }).catch(async () => loc.selectOption(propertyType));
+    else {
+      await loc.click();
+      await page.getByText(propertyType, { exact: true }).first().click();
+    }
+    return true;
+  }
+
+  const select = page.locator('select').filter({ has: page.locator('option') }).first();
+  if (await select.count()) {
+    const options = await select.locator('option').allTextContents();
+    if (options.some((x) => x.toLowerCase().includes(propertyType.toLowerCase()))) {
+      await select.selectOption({ label: options.find((x) => x.toLowerCase().includes(propertyType.toLowerCase())) });
+      return true;
+    }
+  }
+  return false;
+}
+
+async function fillProject(page, building) {
+  if (SEL.projectInput) {
+    const input = page.locator(SEL.projectInput).first();
+    await input.fill(building);
+    await page.waitForTimeout(700);
+    const exact = page.getByText(building, { exact: true }).first();
+    if (await exact.count()) await exact.click();
+    else await input.press('Enter');
+    return true;
+  }
+
+  const candidates = page.locator('input');
+  const count = await candidates.count();
+  for (let i = 0; i < count; i++) {
+    const loc = candidates.nth(i);
+    const meta = `${await loc.getAttribute('placeholder') || ''} ${await loc.getAttribute('name') || ''} ${await loc.getAttribute('aria-label') || ''}`.toLowerCase();
+    if (/project|building|area/.test(meta)) {
+      await loc.fill(building);
+      await page.waitForTimeout(700);
+      const exact = page.getByText(building, { exact: true }).first();
+      if (await exact.count()) await exact.click();
+      else await loc.press('Enter');
+      return true;
+    }
+  }
+  return false;
+}
+
+async function fillPropertyNo(page, propertyNo) {
+  if (!propertyNo) return false;
+  if (SEL.propertyNoInput) {
+    await page.locator(SEL.propertyNoInput).first().fill(String(propertyNo));
+    return true;
+  }
+  const candidates = page.locator('input');
+  const count = await candidates.count();
+  for (let i = 0; i < count; i++) {
+    const loc = candidates.nth(i);
+    const meta = `${await loc.getAttribute('placeholder') || ''} ${await loc.getAttribute('name') || ''} ${await loc.getAttribute('aria-label') || ''}`.toLowerCase();
+    if (/property.*(no|number)|property_no|property number/.test(meta)) {
+      await loc.fill(String(propertyNo));
+      return true;
+    }
+  }
+  return false;
+}
+
+async function clickSearch(page) {
+  if (SEL.searchButton) {
+    await page.locator(SEL.searchButton).first().click();
+    return true;
+  }
+  const button = page.getByRole('button', { name: /search|view|apply|submit|show/i }).first();
+  if (await button.count()) {
+    await button.click();
+    return true;
+  }
+  return false;
+}
+
+async function extractRows(page) {
+  const root = SEL.resultRoot ? page.locator(SEL.resultRoot) : page;
+  const rows = await root.locator('table tbody tr').evaluateAll((trs) =>
+    trs.slice(0, 200).map((tr) => Array.from(tr.querySelectorAll('td')).map((td) => (td.innerText || td.textContent || '').trim()))
+  ).catch(() => []);
+  if (rows.length) return rows;
+
+  const texts = await root.locator('[role=row], .transaction, .history-item, .property-history-item').allTextContents().catch(() => []);
+  return texts.slice(0, 200).map((x) => [normalizeText(x)]);
+}
+
+function deriveTransactionSummary(rows, ownerSourceDate) {
+  const flattened = rows.map((cells) => cells.map(normalizeText));
+  const transactions = [];
+  for (const cells of flattened) {
+    const joined = cells.join(' | ');
+    const dateMatch = joined.match(/\b(\d{4}-\d{2}-\d{2}|\d{1,2}[\/-]\d{1,2}[\/-]\d{2,4}|\d{1,2}\s+[A-Za-z]{3,9}\s+\d{4})\b/);
+    const priceMatches = [...joined.matchAll(/(?:AED\s*)?([0-9][0-9,]{4,})(?:\s*AED)?/gi)];
+    const isSale = /sale|sold|transfer|purchase/i.test(joined);
+    const isRent = /rent|lease|tenancy/i.test(joined);
+    if (!dateMatch && !isSale && !isRent) continue;
+    transactions.push({
+      type: isSale ? 'SALE' : isRent ? 'RENT' : 'UNKNOWN',
+      date: dateMatch ? dateMatch[1] : null,
+      amountAED: priceMatches.length ? parseNumber(priceMatches[priceMatches.length - 1][1]) : null,
+      raw: joined.slice(0, 600),
     });
+  }
 
-    await new Promise(r=>setTimeout(r,250));
+  const sales = transactions.filter((x) => x.type === 'SALE' && parseDate(x.date)).sort((a, b) => parseDate(b.date) - parseDate(a.date));
+  const rents = transactions.filter((x) => x.type === 'RENT' && parseDate(x.date)).sort((a, b) => parseDate(b.date) - parseDate(a.date));
+  const latestSale = sales[0] || null;
+  const latestRent = rents[0] || null;
 
-    const pattern=path.join(frameDir,'element-%03d.jpeg');
-    await new Promise((resolve,reject)=>{
-      const args=[
-        '-y',
-        '-framerate',String(composition.fps),
-        '-i',pattern,
-        '-c:v','libx264',
-        '-preset','superfast',
-        '-crf','24',
-        '-pix_fmt','yuv420p',
-        '-movflags','+faststart',
-        outputLocation
-      ];
-      const ff=spawn('ffmpeg',args,{stdio:['ignore','pipe','pipe']});
-      let stderr='';
-      ff.stderr.on('data',d=>{stderr+=d.toString(); if(stderr.length>12000) stderr=stderr.slice(-12000);});
-      ff.on('error',reject);
-      ff.on('close',(code,signal)=>{
-        if(code===0)return resolve();
-        reject(new Error(`System FFmpeg failed with code ${code}${signal?` (${signal})`:''}: ${stderr.slice(-5000)}`));
-      });
-    });
+  return {
+    transactions,
+    latestSaleDate: latestSale?.date || null,
+    latestSalePriceAED: latestSale?.amountAED ?? null,
+    latestRentDate: latestRent?.date || null,
+    latestAnnualRentAED: latestRent?.amountAED ?? null,
+    saleAfterSource: computeSaleAfterSource(latestSale?.date, ownerSourceDate),
+  };
+}
+
+async function verifyUnit(payload) {
+  const building = normalizeText(payload.building);
+  const unitNumber = normalizeText(payload.unitNumber);
+  const propertyNo = normalizeText(payload.propertyNo);
+  const ownerSourceDate = payload.ownerSourceDate || null;
+
+  if (!building || !unitNumber) {
+    return { httpStatus: 400, body: { status: 'INVALID_INPUT', required: ['building', 'unitNumber'] } };
+  }
+
+  if (!STORAGE_STATE_B64) {
+    return {
+      httpStatus: 409,
+      body: {
+        status: 'AUTH_REQUIRED',
+        authSessionStatus: 'AUTH_REQUIRED',
+        sourceStatus: 'SOURCE_UNAVAILABLE',
+        nextAction: 'Set DXB_STORAGE_STATE_B64 in Railway with an authenticated DXBinteract Playwright storageState.',
+      },
+    };
+  }
+
+  const ctx = await getContext();
+  const page = await ctx.newPage();
+  try {
+    await page.goto(HISTORY_URL, { waitUntil: 'domcontentloaded', timeout: NAV_TIMEOUT_MS });
+    await page.waitForTimeout(1000);
+
+    if (await looksLoggedOut(page)) {
+      return { httpStatus: 401, body: { status: 'SESSION_EXPIRED', authSessionStatus: 'SESSION_EXPIRED', sourceStatus: 'SOURCE_UNAVAILABLE' } };
+    }
+
+    await maybeSelectPropertyType(page, payload.propertyType || 'Apartment');
+    const projectOk = await fillProject(page, building);
+
+    if (!propertyNo) {
+      return {
+        httpStatus: 422,
+        body: {
+          status: 'PROPERTY_NO_REQUIRED',
+          authSessionStatus: 'OK',
+          sourceStatus: 'UNIT_MAPPING_REQUIRED',
+          building,
+          unitNumber,
+          projectFieldResolved: projectOk,
+          nextAction: 'Resolve and store the DXB/DLD Property No for this unit, then retry exact history verification.',
+          pageSignature: process.env.DEBUG_SIGNATURE === 'true' ? await pageSignature(page) : undefined,
+        },
+      };
+    }
+
+    const propertyFieldOk = await fillPropertyNo(page, propertyNo);
+    if (!propertyFieldOk) {
+      return {
+        httpStatus: 422,
+        body: {
+          status: 'SELECTOR_MAPPING_REQUIRED',
+          authSessionStatus: 'OK',
+          sourceStatus: 'SOURCE_UNAVAILABLE',
+          missing: 'propertyNoInput',
+          pageSignature: await pageSignature(page),
+        },
+      };
+    }
+
+    const searchOk = await clickSearch(page);
+    if (!searchOk) {
+      return {
+        httpStatus: 422,
+        body: {
+          status: 'SELECTOR_MAPPING_REQUIRED',
+          authSessionStatus: 'OK',
+          sourceStatus: 'SOURCE_UNAVAILABLE',
+          missing: 'searchButton',
+          pageSignature: await pageSignature(page),
+        },
+      };
+    }
+
+    await page.waitForLoadState('networkidle', { timeout: 15000 }).catch(() => {});
+    await page.waitForTimeout(1200);
+
+    if (await looksLoggedOut(page)) {
+      return { httpStatus: 401, body: { status: 'SESSION_EXPIRED', authSessionStatus: 'SESSION_EXPIRED', sourceStatus: 'SOURCE_UNAVAILABLE' } };
+    }
+
+    const rows = await extractRows(page);
+    if (!rows.length) {
+      return {
+        httpStatus: 200,
+        body: {
+          status: 'NO_EXACT_HISTORY_RETURNED',
+          sourceStatus: 'NO_DATA',
+          authSessionStatus: 'OK',
+          building,
+          unitNumber,
+          propertyNo,
+          exactUnitMatch: false,
+          matchConfidence: 0,
+          historyCoverage: 'NONE',
+          saleAfterSource: 'Unknown',
+        },
+      };
+    }
+
+    const summary = deriveTransactionSummary(rows, ownerSourceDate);
+    return {
+      httpStatus: 200,
+      body: {
+        status: 'SUCCESS',
+        sourceAdapter: 'DXBINTERACT',
+        sourceMethod: 'RAILWAY_PLAYWRIGHT_EXACT_PROPERTY_HISTORY',
+        sourceAuthority: 'DXBinteract',
+        sourceStatus: 'LIVE_EXACT_EVIDENCE',
+        authSessionStatus: 'OK',
+        building,
+        unitNumber,
+        propertyNo,
+        exactUnitMatch: true,
+        matchStatus: 'EXACT_MATCH',
+        matchConfidence: 100,
+        historyCoverage: 'COMPLETE',
+        latestSaleDate: summary.latestSaleDate,
+        latestSalePriceAED: summary.latestSalePriceAED,
+        latestRentDate: summary.latestRentDate,
+        latestAnnualRentAED: summary.latestAnnualRentAED,
+        saleAfterSource: summary.saleAfterSource,
+        rentAfterSource: 'Unknown',
+        transactions: summary.transactions,
+        checkedAt: new Date().toISOString(),
+      },
+    };
   } finally {
-    await fs.rm(frameDir,{recursive:true,force:true}).catch(()=>{});
+    await page.close().catch(() => {});
   }
-
-  const base=`${req.protocol}://${req.get('host')}`;
-  return {
-    ok:true,
-    projectId,
-    buildVersion,
-    renderBatchId,
-    sceneId:scene.scene_id,
-    outputFileName:fileName,
-    outputUrl:`${base}/outputs/${encodeURIComponent(fileName)}`,
-    renderMs:Date.now()-started,
-    width,
-    height,
-    strategy:'renderFrames-then-system-ffmpeg'
-  };
 }
 
+app.get('/health', (_req, res) => {
+  res.json({
+    status: 'ok',
+    service: 'yeejay-dxbinteract-worker',
+    version: '0.1.0',
+    sessionConfigured: Boolean(STORAGE_STATE_B64),
+    selectorConfig: Object.fromEntries(Object.entries(SEL).map(([k, v]) => [k, Boolean(v)])),
+  });
+});
 
-async function renderProductionOne(body,req){
-  const started=Date.now();
-  const {
-    projectId,
-    qualityVersion,
-    productionBuildVersion,
-    renderTestId='premium-test',
-    renderProfile='preview',
-    sceneManifest={},
-    recipes=[],
-    assetTasks=[]
-  }=body||{};
-
-  if(!String(sceneManifest.scene_id||'').trim()){
-    throw new Error('Missing sceneManifest.scene_id');
-  }
-
-  const serveUrl=await getBundle();
-  const inputProps={package:{sceneManifest,recipes,assetTasks,qualityVersion,productionBuildVersion}};
-  const composition=await selectComposition({serveUrl,id:'ProductionScene',inputProps});
-
-  const safeProject=String(projectId||'project').replace(/[^A-Za-z0-9_-]/g,'_');
-  const safeBuild=String(productionBuildVersion||'prod').replace(/[^A-Za-z0-9_-]/g,'_');
-  const safeTest=String(renderTestId||'test').replace(/[^A-Za-z0-9_-]/g,'_');
-  const fileName=`${safeProject}_${safeBuild}_${sceneManifest.scene_id}_${safeTest}.mp4`;
-  const outputLocation=path.join(outputs,fileName);
-  const frameDir=path.join(frameRoot,`${safeProject}_${safeBuild}_${sceneManifest.scene_id}_${safeTest}`);
-
-  const normalizedProfile=String(renderProfile||'preview').toLowerCase();
-  const scale=(normalizedProfile==='master1080'||normalizedProfile==='native'||normalizedProfile==='full')?1:0.5;
-  const width=Math.round(composition.width*scale);
-  const height=Math.round(composition.height*scale);
-
-  await fs.rm(frameDir,{recursive:true,force:true});
-  await fs.mkdir(frameDir,{recursive:true});
-
-  try{
-    await renderFrames({
-      composition,
-      serveUrl,
-      outputDir:frameDir,
-      inputProps,
-      imageFormat:'jpeg',
-      jpegQuality:scale===1?82:74,
-      scale,
-      concurrency:1,
-      muted:true,
-      logLevel:'warn',
-      browserExecutable:process.env.REMOTION_BROWSER_EXECUTABLE||undefined,
-      chromiumOptions:{enableMultiProcessOnLinux:false}
+app.get('/session/status', guard, async (_req, res) => {
+  try {
+    const result = await serial(async () => {
+      if (!STORAGE_STATE_B64) return { httpStatus: 409, body: { status: 'AUTH_REQUIRED', sessionConfigured: false } };
+      const ctx = await getContext();
+      const page = await ctx.newPage();
+      try {
+        await page.goto(HISTORY_URL, { waitUntil: 'domcontentloaded', timeout: NAV_TIMEOUT_MS });
+        const loggedOut = await looksLoggedOut(page);
+        return { httpStatus: loggedOut ? 401 : 200, body: { status: loggedOut ? 'SESSION_EXPIRED' : 'OK', sessionConfigured: true, url: page.url(), title: await page.title() } };
+      } finally {
+        await page.close().catch(() => {});
+      }
     });
+    res.status(result.httpStatus).json(result.body);
+  } catch (error) {
+    await resetBrowser();
+    res.status(500).json({ status: 'ERROR', code: 'SESSION_CHECK_FAILED', message: error.message });
+  }
+});
 
-    await new Promise(r=>setTimeout(r,250));
-
-    const pattern=path.join(frameDir,'element-%03d.jpeg');
-    await new Promise((resolve,reject)=>{
-      const args=[
-        '-y',
-        '-framerate',String(composition.fps),
-        '-i',pattern,
-        '-c:v','libx264',
-        '-preset','superfast',
-        '-crf',scale===1?'18':'21',
-        '-pix_fmt','yuv420p',
-        '-movflags','+faststart',
-        outputLocation
-      ];
-      const ff=spawn('ffmpeg',args,{stdio:['ignore','pipe','pipe']});
-      let stderr='';
-      ff.stderr.on('data',d=>{stderr+=d.toString(); if(stderr.length>12000) stderr=stderr.slice(-12000);});
-      ff.on('error',reject);
-      ff.on('close',(code,signal)=>{
-        if(code===0)return resolve();
-        reject(new Error(`Production FFmpeg failed with code ${code}${signal?` (${signal})`:''}: ${stderr.slice(-5000)}`));
-      });
+app.post('/verify-unit', guard, async (req, res) => {
+  try {
+    const result = await serial(() => verifyUnit(req.body || {}));
+    res.status(result.httpStatus).json(result.body);
+  } catch (error) {
+    await resetBrowser();
+    res.status(500).json({
+      status: 'ERROR',
+      sourceStatus: 'SOURCE_UNAVAILABLE',
+      authSessionStatus: 'UNKNOWN',
+      code: 'WORKER_FAILURE',
+      message: error.message,
     });
-  }finally{
-    await fs.rm(frameDir,{recursive:true,force:true}).catch(()=>{});
-  }
-
-  const xf=(req.get('x-forwarded-proto')||'').split(',')[0].trim();
-  const base=`${xf||req.protocol||'https'}://${req.get('host')}`;
-
-  return {
-    ok:true,
-    projectId,
-    qualityVersion,
-    productionBuildVersion,
-    renderTestId,
-    sceneId:sceneManifest.scene_id,
-    outputFileName:fileName,
-    outputUrl:`${base}/outputs/${encodeURIComponent(fileName)}`,
-    renderMs:Date.now()-started,
-    width,
-    height,
-    fps:composition.fps,
-    durationSeconds:composition.durationInFrames/composition.fps,
-    strategy:scale===1?'production-native-1080x1920-remotion-2.5d-full-film':'production-preview-remotion-2.5d-full-film',
-    renderProfile:normalizedProfile,
-    rendererVersion:'0.15.0'
-  };
-}
-
-function compactError(e){
-  const raw=String(e?.message||e||'Unknown error');
-  const lines=raw.split('\n').map(s=>s.trim()).filter(Boolean);
-  const tail=lines.slice(-18).join(' | ');
-  return tail.slice(-3000);
-}
-
-function publicBase(req){
-  const xf=(req.get('x-forwarded-proto')||'').split(',')[0].trim();
-  return `${xf||req.protocol||'https'}://${req.get('host')}`;
-}
-
-function safePart(v){
-  return String(v??'').replace(/[^A-Za-z0-9_.-]/g,'_').slice(0,180);
-}
-
-function taskDriveId(task={}){
-  if(task.drive_file_id) return String(task.drive_file_id);
-  const spec=task.build_spec||{};
-  const params=Array.isArray(spec.parameters)?spec.parameters:[];
-  return String(params.find(x=>x?.name==='drive_file_id')?.value||'');
-}
-
-function enrichStagedAssets(assetTasks=[],stagedMedia=[]){
-  const byDrive=new Map((stagedMedia||[]).map(x=>[String(x.drive_file_id||''),String(x.staged_local_url||x.staged_url||'')]));
-  return (assetTasks||[]).map(task=>{
-    const id=taskDriveId(task);
-    const staged=byDrive.get(id)||String(task.staged_url||'');
-    return {...task,staged_url:staged};
-  });
-}
-
-async function renderUniversalOne(body,req){
-  const started=Date.now();
-  const {
-    projectId,
-    qualityVersion,
-    productionBuildVersion,
-    renderBatchId='universal-render',
-    renderProfile='native',
-    sceneManifest={},
-    recipes=[],
-    assetTasks=[],
-    stagedMedia=[]
-  }=body||{};
-
-  if(!String(sceneManifest.scene_id||'').trim()) throw new Error('Missing sceneManifest.scene_id');
-
-  const enrichedTasks=enrichStagedAssets(assetTasks,stagedMedia);
-  const missing=enrichedTasks.filter(x=>String(x.source_mode||'')==='google_drive_source_media'&&!String(x.staged_url||'').trim());
-  if(missing.length){
-    throw new Error('Missing staged media for '+missing.map(x=>x.asset_id||taskDriveId(x)).join(', '));
-  }
-
-  const serveUrl=await getBundle();
-  const inputProps={package:{sceneManifest,recipes,assetTasks:enrichedTasks,qualityVersion,productionBuildVersion}};
-  const composition=await selectComposition({serveUrl,id:'ProductionScene',inputProps});
-
-  const safeProject=safePart(projectId||'project');
-  const safeBuild=safePart(productionBuildVersion||'prod');
-  const safeBatch=safePart(renderBatchId||'batch');
-  const sceneId=safePart(sceneManifest.scene_id);
-  const fileName=`${safeProject}_${safeBuild}_${sceneId}_${safeBatch}.mp4`;
-  const outputLocation=path.join(outputs,fileName);
-  const frameDir=path.join(frameRoot,`${safeProject}_${safeBuild}_${sceneId}_${safeBatch}`);
-
-  const normalizedProfile=String(renderProfile||'native').toLowerCase();
-  const scale=(normalizedProfile==='preview'||normalizedProfile==='540'||normalizedProfile==='half')?0.5:1;
-  const width=Math.round(composition.width*scale);
-  const height=Math.round(composition.height*scale);
-
-  await fs.rm(frameDir,{recursive:true,force:true});
-  await fs.mkdir(frameDir,{recursive:true});
-
-  try{
-    await renderFrames({
-      composition,
-      serveUrl,
-      outputDir:frameDir,
-      inputProps,
-      imageFormat:'jpeg',
-      jpegQuality:scale===1?82:74,
-      scale,
-      concurrency:1,
-      muted:true,
-      logLevel:'warn',
-      browserExecutable:process.env.REMOTION_BROWSER_EXECUTABLE||undefined,
-      chromiumOptions:{enableMultiProcessOnLinux:false}
-    });
-
-    await new Promise(r=>setTimeout(r,250));
-
-    const pattern=path.join(frameDir,'element-%03d.jpeg');
-    await new Promise((resolve,reject)=>{
-      const args=[
-        '-y','-framerate',String(composition.fps),'-i',pattern,
-        '-c:v','libx264','-preset','superfast','-crf',scale===1?'18':'21',
-        '-pix_fmt','yuv420p','-movflags','+faststart',outputLocation
-      ];
-      const ff=spawn('ffmpeg',args,{stdio:['ignore','pipe','pipe']});
-      let stderr='';
-      ff.stderr.on('data',d=>{stderr+=d.toString();if(stderr.length>12000)stderr=stderr.slice(-12000);});
-      ff.on('error',reject);
-      ff.on('close',(code,signal)=>{
-        if(code===0)return resolve();
-        reject(new Error(`Universal FFmpeg failed with code ${code}${signal?` (${signal})`:''}: ${stderr.slice(-5000)}`));
-      });
-    });
-  }finally{
-    await fs.rm(frameDir,{recursive:true,force:true}).catch(()=>{});
-  }
-
-  return {
-    ok:true,
-    projectId,
-    qualityVersion,
-    productionBuildVersion,
-    renderBatchId,
-    sceneId:sceneManifest.scene_id,
-    outputFileName:fileName,
-    outputUrl:`${publicBase(req)}/outputs/${encodeURIComponent(fileName)}`,
-    renderMs:Date.now()-started,
-    width,height,fps:composition.fps,
-    durationSeconds:composition.durationInFrames/composition.fps,
-    strategy:scale===1?'universal-native-1080x1920-media-aware':'universal-preview-540x960-media-aware',
-    renderProfile:normalizedProfile,
-    rendererVersion:'0.15.0'
-  };
-}
-
-app.post('/stage-media',upload.single('media'),async(req,res)=>{
-  try{
-    if(!req.file) return res.status(400).json({ok:false,error:'Missing multipart media file'});
-    const projectId=safePart(req.body?.projectId||'project');
-    const build=safePart(req.body?.productionBuildVersion||'build');
-    const driveFileId=safePart(req.body?.driveFileId||req.body?.assetKey||req.file.originalname||Date.now());
-    const ext=path.extname(req.file.originalname||'')||'.mp4';
-    const dir=path.join(stagedRoot,projectId,build);
-    await fs.mkdir(dir,{recursive:true});
-    const target=path.join(dir,driveFileId+ext);
-    await fs.copyFile(req.file.path,target);
-    await fs.rm(req.file.path,{force:true}).catch(()=>{});
-    const rel=[projectId,build,path.basename(target)].map(encodeURIComponent).join('/');
-    res.json({
-      ok:true,
-      drive_file_id:req.body?.driveFileId||'',
-      staged_file_name:path.basename(target),
-      staged_url:`${publicBase(req)}/render-assets/${rel}`,
-      staged_local_url:`http://127.0.0.1:${PORT}/render-assets/${rel}`
-    });
-  }catch(e){
-    res.status(500).json({ok:false,error:compactError(e)});
   }
 });
 
-app.post('/cleanup-staged-media',async(req,res)=>{
-  const projectId=safePart(req.body?.projectId||'');
-  const build=safePart(req.body?.productionBuildVersion||'');
-  if(!projectId||!build) return res.status(400).json({ok:false,error:'Missing project/build'});
-  await fs.rm(path.join(stagedRoot,projectId,build),{recursive:true,force:true}).catch(()=>{});
-  res.json({ok:true,projectId,productionBuildVersion:build});
+app.post('/admin/reset-browser', guard, async (_req, res) => {
+  await serial(resetBrowser);
+  res.json({ status: 'OK' });
 });
 
-app.post('/render-universal-scene',(req,res)=>{
-  const job=()=>renderUniversalOne(req.body,req);
-  const p=queue.then(job,job);
-  queue=p.catch(()=>{});
-  p.then(x=>res.json(x)).catch((e)=>{
-    const error=compactError(e);
-    console.error('render-universal-scene failed',error);
-    res.status(500).json({ok:false,error});
-  });
+app.listen(PORT, '0.0.0.0', () => {
+  console.log(JSON.stringify({ event: 'worker_started', port: PORT, headless: HEADLESS, historyUrl: HISTORY_URL }));
 });
-
-app.post('/render-universal-batch',async(req,res)=>{
-  const body=req.body||{};
-  const packages=Array.isArray(body.packages)?body.packages:[];
-  if(!packages.length) return res.status(400).json({ok:false,error:'Missing packages array'});
-  const results=[];
-  for(const item of packages){
-    try{
-      results.push(await renderUniversalOne(item,req));
-    }catch(e){
-      results.push({
-        ok:false,
-        sceneId:item?.sceneManifest?.scene_id||'',
-        projectId:item?.projectId||'',
-        productionBuildVersion:item?.productionBuildVersion||'',
-        error:compactError(e)
-      });
-    }
-    await new Promise(r=>setTimeout(r,350));
-  }
-  const failed=results.filter(x=>x.ok!==true).length;
-  res.status(failed?207:200).json({
-    ok:failed===0,
-    total:results.length,
-    rendered:results.length-failed,
-    failed,
-    results,
-    rendererVersion:'0.15.0',
-    strategy:'universal-sequential-media-aware'
-  });
-});
-
-app.get('/test-s01',async(req,res)=>{
-  try{
-    const manifest=JSON.parse(await fs.readFile(path.join(here,'src','manifest.json'),'utf8'));
-    const scene=manifest.scenes?.[0];
-    const result=await renderOne({
-      projectId:manifest.project_id,
-      buildVersion:manifest.build_version,
-      renderBatchId:'browser-test',
-      scene
-    },req);
-    res.json(result);
-  }catch(e){
-    const error=compactError(e);
-    console.error('test-s01 failed',error);
-    res.status(500).json({ok:false,error});
-  }
-});
-
-app.get('/test-production-s02',async(req,res)=>{
-  try{
-    const result=await renderProductionOne({
-      projectId:'VID-20260923-860786371',
-      qualityVersion:'quality-20260928113113',
-      productionBuildVersion:'prod-20260928120447',
-      renderTestId:'browser-premium',
-      sceneManifest:{scene_id:'S02',start_sec:5.677,end_sec:15.209,duration_sec:9.532},
-      recipes:[],
-      assetTasks:[]
-    },req);
-    res.json(result);
-  }catch(e){
-    const error=compactError(e);
-    console.error('test-production-s02 failed',error);
-    res.status(500).json({ok:false,error});
-  }
-});
-
-app.post('/render-production-batch',async(req,res)=>{
-  const body=req.body||{};
-  const packages=Array.isArray(body.packages)?body.packages:[];
-  if(!packages.length) return res.status(400).json({ok:false,error:'Missing packages array'});
-  const results=[];
-  for(const item of packages){
-    try{
-      const result=await renderProductionOne(item,req);
-      results.push(result);
-    }catch(e){
-      const error=compactError(e);
-      console.error('render-production-batch item failed',item?.sceneManifest?.scene_id||'',error);
-      results.push({
-        ok:false,
-        sceneId:item?.sceneManifest?.scene_id||'',
-        projectId:item?.projectId||'',
-        productionBuildVersion:item?.productionBuildVersion||'',
-        error
-      });
-    }
-    await new Promise(r=>setTimeout(r,350));
-  }
-  const failed=results.filter(x=>x.ok!==true).length;
-  res.status(failed?207:200).json({
-    ok:failed===0,
-    total:results.length,
-    rendered:results.length-failed,
-    failed,
-    results,
-    rendererVersion:'0.15.0'
-  });
-});
-
-app.post('/render-production-scene',(req,res)=>{
-  const job=()=>renderProductionOne(req.body,req);
-  const p=queue.then(job,job);
-  queue=p.catch(()=>{});
-  p.then(x=>res.json(x)).catch((e)=>{
-    const error=compactError(e);
-    const stack=String(e?.stack||'').split('\n').slice(0,8).join('\n');
-    console.error('render-production-scene failed',error,stack);
-    res.status(500).json({ok:false,error,details:stack});
-  });
-});
-
-app.post('/render-scene',(req,res)=>{
-  const job=()=>renderOne(req.body,req);
-  const p=queue.then(job,job);
-  queue=p.catch(()=>{});
-  p.then(x=>res.json(x)).catch((e)=>{
-    const error=compactError(e);
-    const stack=String(e?.stack||'').split('\n').slice(0,8).join('\n');
-    console.error('render-scene failed',error,stack);
-    res.status(500).json({ok:false,error,details:stack});
-  });
-});
-
-app.post('/refresh-scenes',async(req,res)=>{
-  const body=req.body||{};
-  const requests=Array.isArray(body.requests)?body.requests:[];
-  if(!requests.length) return res.status(400).json({ok:false,error:'Missing requests array'});
-
-  const results=[];
-  for(const item of requests){
-    try{
-      const result=await renderOne(item,req);
-      results.push(result);
-    }catch(e){
-      const error=compactError(e);
-      console.error('refresh-scenes item failed',item?.scene?.scene_id||'',error);
-      results.push({
-        ok:false,
-        sceneId:item?.scene?.scene_id||'',
-        projectId:item?.projectId||'',
-        renderBatchId:item?.renderBatchId||'',
-        error
-      });
-    }
-    await new Promise(r=>setTimeout(r,350));
-  }
-
-  const failed=results.filter(x=>x.ok!==true).length;
-  res.status(failed?207:200).json({
-    ok:failed===0,
-    total:results.length,
-    rendered:results.length-failed,
-    failed,
-    results
-  });
-});
-
-app.post('/assemble-final',upload.single('voice'),createAssemblyHandler({here,outputs}));
-
-app.post('/assemble-premium',upload.any(),createPremiumAssemblyHandler({here,outputs}));
-
-app.listen(PORT,'0.0.0.0',()=>console.log(`render-worker listening on :${PORT}`));
