@@ -32,6 +32,43 @@ let browser = null;
 let context = null;
 let queue = Promise.resolve();
 
+const AGENT_KEY = process.env.LOCAL_AGENT_KEY || '';
+const JOB_TTL_MS = Number(process.env.JOB_TTL_MS || 60 * 60 * 1000);
+const LEASE_MS = Number(process.env.JOB_LEASE_MS || 2 * 60 * 1000);
+const jobs = new Map();
+
+function agentGuard(req, res, next) {
+  if (!AGENT_KEY) {
+    return res.status(503).json({ status: 'CONFIG_ERROR', code: 'LOCAL_AGENT_KEY_MISSING' });
+  }
+  if (req.get('x-agent-key') !== AGENT_KEY) {
+    return res.status(401).json({ status: 'UNAUTHORIZED' });
+  }
+  next();
+}
+
+function newJobId() {
+  return 'DXBJ-' + Date.now().toString(36).toUpperCase() + '-' + Math.random().toString(36).slice(2, 8).toUpperCase();
+}
+
+function pruneJobs() {
+  const now = Date.now();
+  for (const [id, job] of jobs.entries()) {
+    const age = now - new Date(job.createdAt).getTime();
+    if (age > JOB_TTL_MS && ['COMPLETE','FAILED','CANCELLED'].includes(job.status)) {
+      jobs.delete(id);
+    }
+    if (job.status === 'LEASED' && job.leaseUntil && new Date(job.leaseUntil).getTime() < now) {
+      job.status = 'QUEUED';
+      job.leaseUntil = null;
+      job.leasedAt = null;
+      job.agentId = null;
+    }
+  }
+}
+
+setInterval(pruneJobs, 30000).unref();
+
 function guard(req, res, next) {
   if (!API_KEY) {
     return res.status(503).json({ status: 'CONFIG_ERROR', code: 'WORKER_API_KEY_MISSING' });
@@ -492,6 +529,89 @@ async function verifyUnit(payload) {
     await page.close().catch(() => {});
   }
 }
+
+
+app.post('/jobs', guard, (req, res) => {
+  pruneJobs();
+  const payload = req.body || {};
+  const action = String(payload.action || 'DISCOVER').toUpperCase();
+  if (!['DISCOVER','VERIFY_UNIT','SESSION_CHECK'].includes(action)) {
+    return res.status(400).json({ status: 'INVALID_ACTION', allowed: ['DISCOVER','VERIFY_UNIT','SESSION_CHECK'] });
+  }
+  const id = newJobId();
+  const now = new Date().toISOString();
+  const job = {
+    id,
+    action,
+    payload,
+    status: 'QUEUED',
+    createdAt: now,
+    updatedAt: now,
+    leasedAt: null,
+    leaseUntil: null,
+    completedAt: null,
+    agentId: null,
+    result: null,
+    error: null,
+  };
+  jobs.set(id, job);
+  return res.status(202).json({ status: 'QUEUED', jobId: id, action, createdAt: now });
+});
+
+app.get('/jobs/:id', guard, (req, res) => {
+  pruneJobs();
+  const job = jobs.get(req.params.id);
+  if (!job) return res.status(404).json({ status: 'NOT_FOUND' });
+  return res.json(job);
+});
+
+app.post('/agent/lease', agentGuard, (req, res) => {
+  pruneJobs();
+  const now = Date.now();
+  const agentId = String(req.body?.agentId || 'local-mac');
+  const queued = [...jobs.values()]
+    .filter((j) => j.status === 'QUEUED')
+    .sort((a,b) => new Date(a.createdAt) - new Date(b.createdAt))[0];
+
+  if (!queued) return res.status(204).end();
+
+  queued.status = 'LEASED';
+  queued.leasedAt = new Date(now).toISOString();
+  queued.leaseUntil = new Date(now + LEASE_MS).toISOString();
+  queued.updatedAt = queued.leasedAt;
+  queued.agentId = agentId;
+
+  return res.json({
+    id: queued.id,
+    action: queued.action,
+    payload: queued.payload,
+    leaseUntil: queued.leaseUntil,
+  });
+});
+
+app.post('/agent/result', agentGuard, (req, res) => {
+  const id = String(req.body?.jobId || '');
+  const job = jobs.get(id);
+  if (!job) return res.status(404).json({ status: 'NOT_FOUND' });
+
+  const ok = req.body?.ok !== false;
+  const now = new Date().toISOString();
+  job.status = ok ? 'COMPLETE' : 'FAILED';
+  job.result = req.body?.result ?? null;
+  job.error = req.body?.error ?? null;
+  job.completedAt = now;
+  job.updatedAt = now;
+  job.leaseUntil = null;
+
+  return res.json({ status: job.status, jobId: id, completedAt: now });
+});
+
+app.get('/agent/status', agentGuard, (_req, res) => {
+  pruneJobs();
+  const counts = { QUEUED:0, LEASED:0, COMPLETE:0, FAILED:0 };
+  for (const j of jobs.values()) counts[j.status] = (counts[j.status] || 0) + 1;
+  res.json({ status: 'OK', queue: counts, now: new Date().toISOString() });
+});
 
 app.get('/health', (_req, res) => {
   res.json({
