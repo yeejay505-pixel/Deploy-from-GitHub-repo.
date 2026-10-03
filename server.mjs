@@ -14,7 +14,8 @@ const STORAGE_STATE_PATH = process.env.DXB_STORAGE_STATE_PATH || '/tmp/dxb-stora
 const STORAGE_STATE_B64 = process.env.DXB_STORAGE_STATE_B64 || '';
 const DXB_USERNAME = process.env.DXB_USERNAME || '';
 const DXB_PASSWORD = process.env.DXB_PASSWORD || '';
-const LOGIN_URL = process.env.DXB_LOGIN_URL || BASE_URL;
+const DXB_RERA_NUMBER = process.env.DXB_RERA_NUMBER || '';
+const LOGIN_URL = process.env.DXB_LOGIN_URL || `${BASE_URL}/my-profile`;
 const HEADLESS = String(process.env.PLAYWRIGHT_HEADLESS ?? 'true').toLowerCase() !== 'false';
 const NAV_TIMEOUT_MS = Number(process.env.NAV_TIMEOUT_MS || 45000);
 
@@ -109,12 +110,43 @@ function computeSaleAfterSource(latestSaleDate, ownerSourceDate) {
 }
 
 async function attemptLogin(page) {
-  if (!DXB_USERNAME || !DXB_PASSWORD) {
-    return { ok: false, status: 'AUTH_REQUIRED', reason: 'DXB_USERNAME_OR_PASSWORD_MISSING' };
-  }
-
   await page.goto(LOGIN_URL, { waitUntil: 'domcontentloaded', timeout: NAV_TIMEOUT_MS }).catch(() => {});
   await page.waitForTimeout(700);
+
+  if (DXB_RERA_NUMBER) {
+    const rera = page.locator(
+      'input[name*="rera" i], input[id*="rera" i], input[placeholder*="rera" i], input[aria-label*="rera" i]'
+    ).first();
+
+    if (await rera.count()) {
+      await rera.fill(DXB_RERA_NUMBER);
+      const submit = page.getByRole('button', { name: /sign in|verify|submit|continue/i }).first();
+      if (await submit.count()) await submit.click();
+      else await rera.press('Enter');
+
+      await page.waitForTimeout(1800);
+      const body = (await page.locator('body').innerText().catch(() => '')).toLowerCase();
+
+      if (/otp|one[- ]time|verification code|two[- ]factor|2fa|mfa/.test(body)) {
+        return { ok: false, status: 'MFA_REQUIRED', reason: 'INTERACTIVE_VERIFICATION_REQUIRED' };
+      }
+      if (/captcha|verify you are human|cloudflare/.test(body)) {
+        return { ok: false, status: 'AUTH_REQUIRED', reason: 'CAPTCHA_REQUIRED' };
+      }
+
+      if (!(await looksLoggedOut(page))) {
+        return { ok: true, status: 'OK', method: 'RERA' };
+      }
+    }
+  }
+
+  if (!DXB_USERNAME || !DXB_PASSWORD) {
+    return {
+      ok: false,
+      status: 'AUTH_REQUIRED',
+      reason: DXB_RERA_NUMBER ? 'RERA_LOGIN_NOT_ACCEPTED_OR_FORM_CHANGED' : 'DXB_AUTH_VARIABLES_MISSING'
+    };
+  }
 
   const email = page.locator('input[type="email"], input[name*="email" i], input[name*="user" i], input[autocomplete="username"]').first();
   const password = page.locator('input[type="password"], input[autocomplete="current-password"]').first();
@@ -127,16 +159,12 @@ async function attemptLogin(page) {
   await password.fill(DXB_PASSWORD);
 
   const submit = page.getByRole('button', { name: /log in|login|sign in|continue/i }).first();
-  if (await submit.count()) {
-    await submit.click();
-  } else {
-    await password.press('Enter');
-  }
+  if (await submit.count()) await submit.click();
+  else await password.press('Enter');
 
   await page.waitForTimeout(1800);
-  await page.waitForLoadState('domcontentloaded').catch(() => {});
-
   const body = (await page.locator('body').innerText().catch(() => '')).toLowerCase();
+
   if (/otp|one[- ]time|verification code|two[- ]factor|2fa|mfa/.test(body)) {
     return { ok: false, status: 'MFA_REQUIRED', reason: 'INTERACTIVE_VERIFICATION_REQUIRED' };
   }
@@ -149,7 +177,7 @@ async function attemptLogin(page) {
     return { ok: false, status: 'AUTH_REQUIRED', reason: 'LOGIN_FAILED_OR_FORM_CHANGED' };
   }
 
-  return { ok: true, status: 'OK' };
+  return { ok: true, status: 'OK', method: 'USERNAME_PASSWORD' };
 }
 
 async function looksLoggedOut(page) {
@@ -449,7 +477,7 @@ app.get('/health', (_req, res) => {
     service: 'yeejay-dxbinteract-worker',
     version: '0.1.0',
     sessionConfigured: Boolean(STORAGE_STATE_B64),
-    credentialsConfigured: Boolean(DXB_USERNAME && DXB_PASSWORD),
+    credentialsConfigured: Boolean(DXB_RERA_NUMBER || (DXB_USERNAME && DXB_PASSWORD)),
     selectorConfig: Object.fromEntries(Object.entries(SEL).map(([k, v]) => [k, Boolean(v)])),
   });
 });
@@ -470,7 +498,7 @@ app.get('/session/status', guard, async (_req, res) => {
               body: {
                 status: login.status,
                 reason: login.reason,
-                credentialsConfigured: Boolean(DXB_USERNAME && DXB_PASSWORD),
+                credentialsConfigured: Boolean(DXB_RERA_NUMBER || (DXB_USERNAME && DXB_PASSWORD)),
               },
             };
           }
