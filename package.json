@@ -5,7 +5,8 @@
   "type": "module",
   "scripts": {
     "start": "node server.mjs",
-    "check": "node --check server.mjs"
+    "check": "node --check server.mjs",
+    "local-agent": "node local-agent.mjs"
   },
   "dependencies": {
     "express": "^5.1.0",
