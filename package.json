@@ -10,16 +10,17 @@
     "check": "node --check server.mjs && node --check scripts/render-all.mjs"
   },
   "dependencies": {
+    "@napi-rs/canvas": "^1.0.10",
     "@react-three/fiber": "^9.0.0",
     "@remotion/bundler": "^4.0.0",
     "@remotion/renderer": "^4.0.0",
     "@remotion/three": "^4.0.0",
     "express": "^5.1.0",
+    "multer": "^2.0.2",
     "react": "^19.0.0",
     "react-dom": "^19.0.0",
     "remotion": "^4.0.0",
-    "three": "^0.180.0",
-    "multer": "^2.0.2"
+    "three": "^0.180.0"
   },
   "engines": {
     "node": ">=20"

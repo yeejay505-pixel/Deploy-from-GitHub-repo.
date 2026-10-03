@@ -8,6 +8,7 @@ import {spawn} from 'node:child_process';
 import multer from 'multer';
 import {createAssemblyHandler} from './assembly.mjs';
 import {createPremiumAssemblyHandler} from './premium-assembly.mjs';
+import {createSemanticRoutes} from './semantic-preview.mjs';
 
 const here=path.dirname(fileURLToPath(import.meta.url));
 const outputs=path.join(here,'outputs');
@@ -76,6 +77,19 @@ function normalizeScene(raw={}){
 }
 
 app.use(express.json({limit:'12mb'}));
+// Opt-in intake API, registered before renderer authentication so it can use
+// its own credential. Existing renderer routes and startup remain unchanged.
+if(process.env.INTAKE_STORE_DIR){
+  const {createIntakeRoutes}=await import('./intake/gateway-routes.mjs');
+  const profile=JSON.parse(await fs.readFile(path.join(here,'quality/approved-visual-reference.json'),'utf8'));
+  const bindings=process.env.INTAKE_BINDINGS_FILE?JSON.parse(await fs.readFile(process.env.INTAKE_BINDINGS_FILE,'utf8')):{};
+  const intake=createIntakeRoutes({app,directory:process.env.INTAKE_STORE_DIR,token:process.env.INTAKE_TOKEN,
+    profile,bindings,allowedChatIds:JSON.parse(process.env.INTAKE_ALLOWED_CHAT_IDS||'["8580375575"]'),
+    durableStorageConfirmed:process.env.INTAKE_DURABLE_STORAGE_CONFIRMED==='1',forbiddenDirectories:[here],
+    intelligence:{model:process.env.INTAKE_INTELLIGENCE_MODEL||'',paidCallsEnabled:process.env.INTAKE_INTELLIGENCE_PAID_ENABLED==='1'},
+    render:{assetDirectory:process.env.INTAKE_RENDER_ASSET_DIR||'',guideEnabled:process.env.INTAKE_RENDER_GUIDE_ENABLED==='1',workerEnabled:process.env.INTAKE_RENDER_WORKER_ENABLED==='1'}});
+  for(const signal of ['SIGTERM','SIGINT'])process.once(signal,()=>{Promise.resolve(intake.close()).then(()=>process.exit(0));});
+}
 app.use('/outputs',express.static(outputs));
 app.use('/render-assets',express.static(stagedRoot));
 
@@ -83,6 +97,11 @@ app.use((req,res,next)=>{
   if(!TOKEN||req.path==='/health')return next();
   if((req.get('authorization')||'')!==`Bearer ${TOKEN}`) return res.status(401).json({ok:false,error:'Unauthorized'});
   next();
+});
+
+createSemanticRoutes({
+  app,outputs,token:TOKEN,baseUrl:publicBase,
+  enqueue:job=>{const p=queue.then(job,job);queue=p.catch(()=>{});return p;}
 });
 
 app.get('/health',async(req,res)=>{

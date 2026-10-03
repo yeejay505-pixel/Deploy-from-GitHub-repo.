@@ -1,0 +1,40 @@
+import fs from 'node:fs/promises';
+import path from 'node:path';
+import os from 'node:os';
+import assert from 'node:assert/strict';
+import express from 'express';
+import {createSemanticRoutes} from '../semantic-preview.mjs';
+import {buildPlanRequest,parsePlanResponse} from '../planner/plan-request.mjs';
+const spec=JSON.parse(await fs.readFile(new URL('../examples/platform-dependency.json',import.meta.url),'utf8'));
+const script=spec.beats.map(b=>b.narration).join(' ');
+const request=buildPlanRequest({script,claims:spec.claims,duration:20,model:'test-model'});
+assert.throws(()=>buildPlanRequest({script,claims:[{...spec.claims[0],status:'unsupported'}],duration:20,model:'test-model'}));
+assert.equal(request.text.format.strict,true);assert.equal(request.store,false);
+const fixture={status:'completed',output:[{type:'message',content:[{type:'output_text',text:JSON.stringify(spec)}]}]};
+assert.equal(parsePlanResponse(fixture,script,spec.claims).sceneId,spec.sceneId);
+assert.throws(()=>parsePlanResponse({...fixture,status:'incomplete'},script,spec.claims));
+assert.throws(()=>parsePlanResponse({status:'completed',output:[{content:[{type:'refusal',refusal:'test'}]}]},script,spec.claims));
+assert.throws(()=>parsePlanResponse(fixture,'a different approved script',spec.claims));
+const changed=structuredClone(spec);changed.claims[0].source='invented research';
+assert.throws(()=>parsePlanResponse({status:'completed',output:[{content:[{type:'output_text',text:JSON.stringify(changed)}]}]},script,spec.claims));
+const dir=await fs.mkdtemp(path.join(os.tmpdir(),'semantic-endpoint-'));
+const app=express();app.use(express.json({limit:'1mb'}));const token='local-test-token';let jobs=0;
+createSemanticRoutes({app,outputs:path.join(dir,'outputs'),token,enqueue:async job=>{jobs++;return job();},baseUrl:req=>`http://127.0.0.1:${req.socket.localPort}`});
+const server=app.listen(0,'127.0.0.1');await new Promise(r=>server.once('listening',r));
+const base=`http://127.0.0.1:${server.address().port}`,headers={'Content-Type':'application/json',Authorization:`Bearer ${token}`};
+try{
+  assert.equal((await fetch(`${base}/semantic-capabilities`)).status,401);
+  const caps=await (await fetch(`${base}/semantic-capabilities`,{headers})).json();assert.equal(caps.previewOnly,true);
+  const bad=structuredClone(spec);bad.objects[0].type='unimplemented';
+  const rejected=await fetch(`${base}/render-semantic-preview`,{method:'POST',headers,body:JSON.stringify({spec:bad})});assert.equal(rejected.status,422);assert.equal(jobs,0);
+  const valid=await fetch(`${base}/validate-semantic-scene`,{method:'POST',headers,body:JSON.stringify({spec})});assert.equal(valid.status,200);
+  // Exercise the actual HTTP rendering path with a short fixture and real FFmpeg.
+  const short=structuredClone(spec);short.sceneId='http-render-test';short.duration=2;
+  short.beats=[{...short.beats[0],start:0,end:2}];short.actions=[{...short.actions[0],start:.2,end:1.6}];short.cues=[];
+  const response=await fetch(`${base}/render-semantic-preview`,{method:'POST',headers,body:JSON.stringify({spec:short,width:540})});assert.equal(response.status,200);
+  const result=await response.json();assert.equal(result.releaseEligible,false);assert.equal(result.voicePending,true);assert.equal(result.width,540);
+  assert.ok((await fs.stat(path.join(dir,'outputs',result.outputFileName))).size>1000);
+  const manifest=await (await fetch(`${base}/semantic-manifest/${result.renderId}`,{headers})).json();assert.equal(manifest.sceneId,short.sceneId);
+  assert.equal((await fetch(`${base}/semantic-manifest/${result.renderId}`)).status,401);
+  console.log('PASS: planner parsing, script/claim preservation, authenticated capabilities, rejection before render, real HTTP preview, and private manifest retrieval.');
+}finally{await new Promise(r=>server.close(r));await fs.rm(dir,{recursive:true,force:true});}

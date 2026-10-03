@@ -1,0 +1,49 @@
+// Reuses measured passages and approved presenter from a trusted local v05 packet.
+// Hand-authored diagnostic plan, not an output from a live intelligence model.
+import fs from 'node:fs/promises';
+import path from 'node:path';
+import {createHash} from 'node:crypto';
+import {spawnSync} from 'node:child_process';
+import {extractSource} from '../intake/source-extractor.mjs';
+const [originalArg,bundleArg]=process.argv.slice(2);if(!originalArg||!bundleArg)throw Error('Usage: build-source-render-example.mjs V05_PACKET_DIRECTORY BUNDLE_DIRECTORY');
+const original=path.resolve(originalArg),bundle=path.resolve(bundleArg),read=async name=>JSON.parse(await fs.readFile(path.join(original,name),'utf8'));
+await fs.mkdir(bundle,{recursive:true});const profile=JSON.parse(await fs.readFile(new URL('../quality/approved-visual-reference.json',import.meta.url),'utf8')),measured=await read('measured-source-plan.json'),oldRender=await read('render-plan.json'),source=await read('source-extract.json');
+const text=source.lines.map(l=>l.text).join('\n')+'\n';await fs.writeFile(path.join(bundle,'source.txt'),text);const extraction=await extractSource(Buffer.from(text),'source.txt');
+const mechanism=extraction.claims.find(c=>c.text.startsWith('Mechanism:')),consequence=extraction.claims.find(c=>c.text.startsWith('Investment consequence:'));if(!mechanism||!consequence)throw Error('original_script_claims_missing');
+const job={event_id:'render-binding-v05-diagnostic',intake:{original_brief:'Component integration test using three measured passages from the approved reference. Not a new investor pitch.',quality_profile:profile},extraction};
+const ids=['gap','completed','yield'],sentences=ids.map(id=>measured.sentences.find(s=>s.id===id)),claimIds=[mechanism.claim_id,consequence.claim_id,consequence.claim_id];
+const O=['office-main','occupier-queue','price-main','yield-range'];
+const states=[['early build','limited build','later build','later build'],['empty queue','waiting occupiers','waiting occupiers','waiting occupiers'],['unlocked price','unlocked price','agreed purchase price','price context dimmed'],['range hidden','range hidden','range hidden','source range visible']];
+const maps=(col)=>O.map((object_id,j)=>({object_id,state:states[j][col]}));
+const visible=[[
+ {object_id:O[0],operation:'build',from_state:states[0][0],to_state:states[0][1]},
+ {object_id:O[1],operation:'queue',from_state:states[1][0],to_state:states[1][1]}
+],[{object_id:O[0],operation:'build',from_state:states[0][1],to_state:states[0][2]},{object_id:O[2],operation:'lock',from_state:states[2][1],to_state:states[2][2]}],[{object_id:O[2],operation:'reveal',from_state:states[2][2],to_state:states[2][3]},{object_id:O[3],operation:'reveal',from_state:states[3][2],to_state:states[3][3]}]];
+const plan={schema_version:'intelligence-plan.v1',event_id:job.event_id,profile_id:profile.profile_id,benchmark_sha256:profile.reference.sha256,
+ thesis:{text:'Examine suitable-space delivery and purchase timing before underwriting the asset.',central_mechanism:'Delivery takes time; an agreed purchase price during construction precedes asset-specific returns.',claim_ids:[mechanism.claim_id,consequence.claim_id],uncertainty:'Conditional source interpretation; market assertions and actual asset economics need review.'},
+ claims:[mechanism,consequence].map(c=>({claim_id:c.claim_id,verbatim_quote:c.text})),definitions:[],examples:[],causal_relationships:[],uncertainties:['Source market estimates remain unverified.','Three nonconsecutive guide-voice passages are used for an integration test, not a complete pitch.'],unsupported_for_review:['No rent, capital appreciation, occupancy or return is guaranteed.'],
+ objects:O.map((id,i)=>({id,role:['same future office','conceptual waiting occupiers','agreed purchase price','source-estimated range'][i],kind:i===3?'counter':'diagram',initial_state:states[i][0],metric_ids:i===3?['estimated-yield']:[]})),
+ metrics:[{id:'estimated-yield',claim_id:consequence.claim_id,display_text:'7–12%',values:[7,12],measure:'Source estimated net yield, percent',period:'Not specified in supplied script',denominator:'Asset-specific invested capital; scope requires verification'}],
+ sentences:sentences.map((s,i)=>({id:s.id,phase:['problem','mechanism','consequence'][i],narration:s.text,claim_ids:[claimIds[i]],epistemic_role:'conditional_inference',visual_argument:{visual_metaphor:['Occupiers wait while suitable space is built.','An agreed price locks while the same office is still being built.','A source range is a starting point for asset-specific review.'][i],persistent_objects:O,state_before:maps(i),visible_action:visible[i],state_after:maps(i+1),quantity_treatment:{mode:i===2?'source_bound':'conceptual',metric_ids:i===2?['estimated-yield']:[]},text_role:'diagram_label',sound_cue:{type:['arrival','lock','resolve'][i],object_id:[O[1],O[2],O[3]][i],trigger:'action_end'},transition:'carry'}})),timing_basis:'draft_unmeasured',release_eligible:false};
+const parts=[],timed=[];let offset=.35;
+for(const [i,s] of sentences.entries()){
+ const duration=s.end-s.start,clip=path.join(bundle,`clip-${i}.wav`);const ff=spawnSync('ffmpeg',['-y','-v','error','-ss',String(s.start),'-t',String(duration),'-i',path.join(original,'guide-narration.wav'),'-ar','48000','-ac','1',clip],{encoding:'utf8'});if(ff.status)throw Error(ff.stderr);parts.push(clip);
+ const words=[];for(const w of s.wordTimestamps){const next={word:w.word,start:offset+w.start-s.start,end:offset+w.end-s.start};if(/^'/.test(w.word)&&words.length){words.at(-1).word+=w.word;words.at(-1).end=next.end;}else words.push(next);}
+ timed.push({id:s.id,narration:s.text,start:offset,end:offset+duration,words});offset+=duration;
+}
+const voicePath=path.join(bundle,'guide-narration.wav'),args=['-y','-v','error',...parts.flatMap(file=>['-i',file]),'-filter_complex','[0:a][1:a][2:a]concat=n=3:v=0:a=1,adelay=350:all=1,apad=pad_dur=0.45[a]','-map','[a]','-ar','48000','-ac','1',voicePath];const ff=spawnSync('ffmpeg',args,{encoding:'utf8'});if(ff.status)throw Error(ff.stderr);
+const audioDuration=Number(JSON.parse(spawnSync('ffprobe',['-v','error','-show_format','-of','json',voicePath],{encoding:'utf8'}).stdout).format.duration);
+const hash=bytes=>createHash('sha256').update(bytes).digest('hex'),asset=async(relative,from)=>{await fs.mkdir(path.dirname(path.join(bundle,relative)),{recursive:true});await fs.copyFile(from,path.join(bundle,relative));return {path:relative,sha256:hash(await fs.readFile(path.join(bundle,relative)))};};
+const presenterAsset=await asset('assets/presenter-poses.png',path.join(original,oldRender.assets.presenterPoses)),fonts=[];for(const [role,file] of [['regular','DejaVuSans.ttf'],['bold','DejaVuSans-Bold.ttf']])fonts.push({...await asset('fonts/'+file,path.join(original,'fonts',file)),role});
+const timing={schema_version:'measured-narration.v1',audio:{path:'guide-narration.wav',sha256:hash(await fs.readFile(voicePath)),duration:audioDuration,voice_status:'guide',alignment_method:'measured_word_timestamps'},sentences:timed};
+const state=(name,p)=>({name,parameters:p});
+const design={schema_version:'source-render-design.v1',profile_id:profile.profile_id,benchmark_sha256:profile.reference.sha256,
+ objects:[{id:O[0],component:'building',layout:{x:705,y:1260,scale:.55},label:'SAME FUTURE OFFICE',metric_id:'',value_index:0,scale_max:0,states:[state(states[0][0],{build:.2,occupied:0,selected:0,opacity:1}),state(states[0][1],{build:.42,occupied:0,selected:0,opacity:1}),state(states[0][2],{build:.72,occupied:0,selected:0,opacity:1})]},
+ {id:O[1],component:'queue',layout:{x:330,y:1385-30,scale:.85},label:'CONCEPTUAL OCCUPIERS',metric_id:'',value_index:0,scale_max:0,states:[state(states[1][0],{progress:0,opacity:1}),state(states[1][1],{progress:1,opacity:1})]},
+ {id:O[2],component:'price_lock',layout:{x:430,y:755,scale:1},label:'',metric_id:'',value_index:0,scale_max:0,states:[state(states[2][0],{progress:0,opacity:0}),state(states[2][2],{progress:1,opacity:1}),state(states[2][3],{progress:1,opacity:0})]},
+ {id:O[3],component:'metric_range',layout:{x:440,y:650,scale:1},label:'',metric_id:'estimated-yield',value_index:0,scale_max:100,states:[state(states[3][0],{progress:0,opacity:0}),state(states[3][3],{progress:1,opacity:1})]}],
+ sentences:ids.map((id,i)=>({id,headline:[['Demand can wait.','Delivery takes time.'],['Agree the price','during construction.'],['A source estimate.','An asset-level decision.']][i],action_anchors:visible[i].map(a=>({object_id:a.object_id,start:{word_index:i===1&&a.object_id===O[2]?13:i===2&&a.object_id===O[3]?6:0,edge:'start'},end:{word_index:i===1&&a.object_id===O[2]?17:i===2&&a.object_id===O[2]?2:i===2?9:timed[i].words.length-1,edge:'end'}})),transition_duration:.28})),
+ presenter:{asset:presenterAsset,poses:oldRender.assets.poses.map(p=>({id:p.id,crop:p.crop,anchorX:p.anchorX})),events:ids.map((sentence_id,i)=>({sentence_id,pose:['think','point','explain'][i]}))},fonts,texture:{type:'procedural_paper',seed:37}};
+for(const [name,value] of Object.entries({'job.json':job,'plan.json':plan,'timing.json':timing,'design.json':design}))await fs.writeFile(path.join(bundle,name),JSON.stringify(value,null,2)+'\n');
+await fs.writeFile(path.join(bundle,'README.md'),'# Render binding component test\n\nThree nonconsecutive measured guide-voice passages from the approved v05 packet. Hand-authored source/visual plan and design bindings. This is not a newly generated pitch, fact verification, creative approval or live workflow test.\n\nReproduce with the committed renderer: `node scripts/render-source-plan.mjs /absolute/path/to/this/bundle output.mp4`. No network or paid generation is required. Source assertions remain unverified. Fonts and presenter assets are retained locally.\n');
+console.log(JSON.stringify({bundle,duration:audioDuration,source:'supplied investor script',model_calls:0,release_eligible:false}));
