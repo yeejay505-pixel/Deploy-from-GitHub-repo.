@@ -1,5 +1,12 @@
 # Commercial off-plan supply-gap pitch v05
 
+**Current review state (3 October 2026):** the owner explicitly approved this
+render's visual design and animation as the reference for future work.
+`approved-visual-reference.json` records the exact video hash and approval
+scope. The original render's manifest and packet retain their historical
+review-time state; their pending flag is superseded for visuals only. Final
+voice, numeric-source verification and publication remain pending.
+
 The full user-provided pitch is retained at a measured 114-second review pace.
 The original nominal 60-second section labels cannot fit its full spoken copy
 without a rushed delivery. This is a revision of the existing engine's pitch,

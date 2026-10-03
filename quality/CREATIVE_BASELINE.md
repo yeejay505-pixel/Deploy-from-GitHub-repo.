@@ -1,8 +1,12 @@
 # Existing engine: creative review baseline
 
-The user accepted the light Yards visual direction. A second, commercial-office
-review is pending user feedback. This baseline is a working preset, not a promise
-of automated quality for every topic. It belongs to the existing engine only.
+The owner approved the visual design and animation of the v05 commercial
+off-plan supply-gap video on 3 October 2026. It supersedes the earlier Yards
+and commercial-office samples as the visual reference. This baseline belongs
+to Animated AI Explainer Videos and does not certify automatic quality on new
+topics. Final voice, evidence verification and publication remain separate
+checks. See `approved-visual-reference.json` for the exact reference hash and
+`UNIVERSAL_INTAKE_SETUP.md` for the next integration step.
 
 ## Design and motion
 
@@ -40,7 +44,8 @@ as projections and cannot become assured outcomes in the script.
 
 The quality review checks visual relevance, narrative order, readability,
 animation continuity and SFX timing. User review of a sample is separate from
-live workflow validation. The next integration test uses an approved script and
-claims through the inactive OpenAI/n8n plan-to-preview workflow, after its draft
-backend and credentials are configured. Voice, final assembly and publishing
-remain later stages.
+live workflow validation. The next architecture integration is Workflow 00's
+durable intake gateway, followed by a renderer binding that can execute the
+approved richer visual profile. The older limited semantic preview remains a
+separate draft and cannot serve as an automatic quality fallback. Final voice,
+source verification and publication remain separate stages.
