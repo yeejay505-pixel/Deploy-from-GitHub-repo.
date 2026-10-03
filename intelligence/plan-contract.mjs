@@ -1,3 +1,4 @@
+import {prepareDeterministicPlan} from './plan-builder.mjs';
 import {compositionStateHints} from '../src/semantic/composition-templates.mjs';
 // This is a draft intelligence / visual-argument contract, not an executable
 // renderer manifest or an approval of the source's assertions.
@@ -106,9 +107,16 @@ export function validateIntelligencePlan(plan,job){
  if(phase!==2)throw Error('narrative_spine_incomplete');
  return {...plan,canonical_claim_ledger:[...selected.values()],review:{facts_verified:false,semantic_entailment:'human_review_required',narration_approved:false,visual_sample_approved:false,measured_audio:'pending',renderer_binding:'pending'},release_eligible:false};
 }
-export function parseIntelligenceResponse(response,job){
+export function prepareIntelligenceResponse(response,job){
  if(response?.status!=='completed')throw Error('intelligence_response_incomplete');
  const parts=(response.output??[]).flatMap(o=>o.content??[]);if(parts.some(p=>p.type==='refusal'))throw Error('intelligence_response_refused');
  const text=parts.filter(p=>p.type==='output_text').map(p=>p.text).join('');if(!text||text.length>1000000)throw Error('intelligence_response_text_invalid');
- return validateIntelligencePlan(JSON.parse(text),job);
+ return prepareDeterministicPlan(JSON.parse(text),sourceContext(job));
+}
+
+export function parseIntelligenceResponse(response,job){
+ const prepared=prepareIntelligenceResponse(response,job);
+ const validated=validateIntelligencePlan(prepared.plan,job);
+ if(!prepared.report.ready)throw Error(prepared.report.issues[0].code);
+ return validated;
 }

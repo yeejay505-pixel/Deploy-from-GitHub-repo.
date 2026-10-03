@@ -1,6 +1,6 @@
 import {createHash,randomUUID} from 'node:crypto';
 import {GatewayError} from '../intake/gateway-store.mjs';
-import {buildIntelligenceRequest,parseIntelligenceResponse,sourceContext} from './plan-contract.mjs';
+import {buildIntelligenceRequest,parseIntelligenceResponse,prepareIntelligenceResponse,sourceContext} from './plan-contract.mjs';
 const hash=value=>createHash('sha256').update(JSON.stringify(value)).digest('hex');
 
 export class IntelligenceAdapter {
@@ -12,12 +12,14 @@ export class IntelligenceAdapter {
    created_at INTEGER NOT NULL,updated_at INTEGER NOT NULL);
    CREATE TABLE IF NOT EXISTS intelligence_retry_history (
    event_id TEXT PRIMARY KEY REFERENCES jobs(event_id),review_hash TEXT NOT NULL,
-   prior_run TEXT NOT NULL,reason TEXT NOT NULL,created_at INTEGER NOT NULL);`);
+   prior_run TEXT NOT NULL,reason TEXT NOT NULL,created_at INTEGER NOT NULL);
+   CREATE TABLE IF NOT EXISTS intelligence_output_audit (event_id TEXT NOT NULL REFERENCES jobs(event_id),call_token TEXT NOT NULL,response TEXT NOT NULL,preparation TEXT,created_at INTEGER NOT NULL,PRIMARY KEY(event_id,call_token));`);
  }
  get(id){
   const r=this.store.db.prepare('SELECT * FROM intelligence_runs WHERE event_id=?').get(id);
   if(!r)return {event_id:id,status:'not_prepared',receipt:null,plan:null,release_eligible:false};
-  return {event_id:id,status:r.status,review_hash:r.status==='review_required'?hash(r):null,retry_used:Boolean(this.store.db.prepare('SELECT event_id FROM intelligence_retry_history WHERE event_id=?').get(id)),plan:r.plan?JSON.parse(r.plan):null,receipt:r.receipt?JSON.parse(r.receipt):null,usage:r.usage?JSON.parse(r.usage):null,response_id:r.response_id,error:r.error,release_eligible:false};
+  const audit=this.store.db.prepare('SELECT preparation FROM intelligence_output_audit WHERE event_id=? AND call_token=?').get(id,r.call_token);
+  return {event_id:id,status:r.status,preparation:audit?.preparation?JSON.parse(audit.preparation):null,review_hash:r.status==='review_required'?hash(r):null,retry_used:Boolean(this.store.db.prepare('SELECT event_id FROM intelligence_retry_history WHERE event_id=?').get(id)),plan:r.plan?JSON.parse(r.plan):null,receipt:r.receipt?JSON.parse(r.receipt):null,usage:r.usage?JSON.parse(r.usage):null,response_id:r.response_id,error:r.error,release_eligible:false};
  }
  prepare(id){
   const job=this.store.get(id);let request;
@@ -67,7 +69,10 @@ export class IntelligenceAdapter {
    if(r.status==='validated_draft')return this.get(id);
    if(r.status!=='calling')return this.get(id);
    const job=this.store.get(id);let plan,error=null;
-   try{plan=parseIntelligenceResponse(response,job);}catch(e){error=e.message;}
+   let preparation=null;
+   try{preparation=prepareIntelligenceResponse(response,job).report;plan=parseIntelligenceResponse(response,job);}catch(e){error=e.message;}
+   const encoded=JSON.stringify(response??null);
+   if(encoded.length<=1000000)this.store.db.prepare('INSERT OR IGNORE INTO intelligence_output_audit(event_id,call_token,response,preparation,created_at) VALUES(?,?,?,?,?)').run(id,token,encoded,preparation?JSON.stringify(preparation):null,this.store.now());
    const status=plan?'validated_draft':response?.status==='completed'?'review_required':'call_uncertain';
    const receipt=plan?{schema_version:'intake-receipt.v1',idempotency_key:id,accepted:true,receipt_id:'INTEL-'+hash({id,input:r.input_hash}).slice(0,24),benchmark_sha256:this.store.profile.reference.sha256,stage:'intelligence_draft',release_eligible:false}:null;
    const usage=response?.usage&&typeof response.usage==='object'?{input_tokens:response.usage.input_tokens??null,output_tokens:response.usage.output_tokens??null,total_tokens:response.usage.total_tokens??null}:null;
