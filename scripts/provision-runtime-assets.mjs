@@ -29,3 +29,4 @@ const marker=path.join(root,'explainer-persistence-marker.json');
 try{fs.writeFileSync(marker,JSON.stringify({schema:'explainer-volume-probe.v1',id:crypto.randomUUID(),created_at:new Date().toISOString()},null,2)+'\n',{flag:'wx',mode:0o600});}
 catch(e){if(e.code!=='EEXIST')throw e;const s=fs.lstatSync(marker);if(!s.isFile()||s.isSymbolicLink())throw new Error('persistence_marker_invalid');}
 console.log('Approved explainer assets verified and provisioned; persistence marker retained.');
+if(process.env.EXPLAINER_START_RENDERER==='1') await import('../server.mjs');
