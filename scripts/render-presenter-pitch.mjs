@@ -15,7 +15,7 @@ for(const [file,family] of [['P052-Roman.otf','P052'],['DejaVuSans.ttf','DejaVu 
 if(!['stills','render'].includes(mode)||!inputPath||!outputPath)throw Error('Usage: render-presenter-pitch.mjs stills|render PLAN OUTPUT [STILL_TIMES]');
 let plan=JSON.parse(await fs.readFile(inputPath,'utf8'));
 
-const assetBase=path.dirname(inputPath);const assets={poses:await loadImage(path.join(assetBase,plan.assets.presenterPoses)),hero:plan.assets.hero?await loadImage(path.join(assetBase,plan.assets.hero)):undefined};
+const assetBase=path.dirname(inputPath);const assets={poses:await loadImage(path.join(assetBase,plan.assets.presenterPoses)),hero:plan.assets.hero?await loadImage(path.join(assetBase,plan.assets.hero)):undefined,interior:plan.assets.interior?await loadImage(path.join(assetBase,plan.assets.interior)):undefined};
 const transitionCanvas=createCanvas(1080,1920),transitionContext=transitionCanvas.getContext('2d');
 const draw=(c,plan,t)=>{
  const state=drawPresenterPitch(c,plan,t,assets);

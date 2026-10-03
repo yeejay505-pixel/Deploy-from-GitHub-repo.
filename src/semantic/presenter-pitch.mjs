@@ -1,6 +1,7 @@
 // Presenter-led review composition. All numbers and event timing come from the local JSON plan.
 import {pitchState,pitchPrimitives,clamp} from './investor-pitch.mjs';
 import {drawUploadedScriptScene} from './uploaded-script-scenes.mjs';
+import {drawSupplyGapScene} from './supply-gap-scenes.mjs';
 const G=pitchPrimitives;
 const C={white:'#FFFFFF',ink:'#173A32',green:'#286650',mint:'#DCEDE2',teal:'#319A9D',pale:'#EDF6F4',copper:'#B37B45',sand:'#F2E8D6',line:'#CDDCD4',muted:'#687C72',red:'#AA6557'};
 const mix=(a,b,p)=>a+(b-a)*p;
@@ -40,7 +41,8 @@ export function drawPresenterPitch(c,plan,t,assets,{width=1080,height=1920}={}){
  a(c,intro,()=>(plan.sceneHeadings?.[id]??heads[id]).forEach((h,i)=>{let size=70;c.font=`700 ${size}px "DejaVu Sans"`;while(c.measureText(h).width>932&&size>42){size-=2;c.font=`700 ${size}px "DejaVu Sans"`;}tx(c,h,76,295+i*83+8*(1-intro),size,i?C.green:C.ink,700);}));
  // Asset geometry and occupants reuse the same persistent identities throughout the film.
  c.save();c.translate(0,-120);
- const custom=plan.variant==='uploaded-script-v4'&&drawUploadedScriptScene(c,plan,t,state,{C,G,mix,ease,a,box,circle,line,arrow,tx,badge,check,doc,briefcase,office,shop,icon,ribbon},assets);
+ const helpers={C,G,mix,ease,a,box,circle,line,arrow,tx,badge,check,doc,briefcase,office,shop,icon,ribbon};
+ const custom=plan.variant==='supply-gap-v5'?drawSupplyGapScene(c,plan,t,state,helpers,assets):plan.variant==='uploaded-script-v4'&&drawUploadedScriptScene(c,plan,t,state,helpers,assets);
  if(custom){}else if(id==='opening'){
   const demand=p('demand-growth');G.building(c,735,1160,.73,1,.63,0);badge(c,'SUITABLE SPACE',610,1230,277);tx(c,'BUSINESS DEMAND',105,635,25,C.green,700);
   briefcase(c,165,790,.85);arrow(c,220,790,460,790,demand,C.teal,5);

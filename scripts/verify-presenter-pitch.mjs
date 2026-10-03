@@ -5,7 +5,7 @@ import {createCanvas,loadImage} from '@napi-rs/canvas';
 import {drawPresenterPitch,presenterFrame} from '../src/semantic/presenter-pitch.mjs';
 import {pitchState} from '../src/semantic/investor-pitch.mjs';
 const [planPath,outPath]=process.argv.slice(2),plan=JSON.parse(await fs.readFile(planPath,'utf8'));
-const assets={poses:await loadImage(path.join(path.dirname(planPath),plan.assets.presenterPoses)),hero:plan.assets.hero?await loadImage(path.join(path.dirname(planPath),plan.assets.hero)):undefined};
+const assets={poses:await loadImage(path.join(path.dirname(planPath),plan.assets.presenterPoses)),hero:plan.assets.hero?await loadImage(path.join(path.dirname(planPath),plan.assets.hero)):undefined,interior:plan.assets.interior?await loadImage(path.join(path.dirname(planPath),plan.assets.interior)):undefined};
 const canvas=createCanvas(1080,1920),ctx=canvas.getContext('2d'),errors=[],textWarnings=[],collisions=[],visualChanges=[];
 const check=(ok,msg)=>{if(!ok)errors.push(msg);};
 const fields=['visualMetaphor','persistentObjects','stateBefore','visibleAction','stateAfter','quantityTreatment','textRole','soundCue','transition'];
