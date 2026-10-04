@@ -29,7 +29,7 @@ export function createIntakeRoutes({app,directory,token,profile,allowedChatIds,b
     const fullAccess=provided.length===expected.length&&timingSafeEqual(provided,expected);
     const readToken=typeof reviewRead.token==='string'&&reviewRead.token.length>=32?Buffer.from('Bearer '+reviewRead.token):null;
     const eventPath='/jobs/'+encodeURIComponent(reviewRead.eventId??'')+'/render';
-    const allowedPath=req.path===eventPath||req.path.startsWith(eventPath+'/artifacts/')&&/^[A-Za-z0-9-]+$/.test(req.path.slice((eventPath+'/artifacts/').length));
+    const allowedPath=req.path===eventPath||req.path.startsWith(eventPath+'/artifacts/')&&/^[A-Za-z0-9_-]+$/.test(req.path.slice((eventPath+'/artifacts/').length));
     const readAccess=readToken&&provided.length===readToken.length&&timingSafeEqual(provided,readToken)&&req.method==='GET'&&allowedPath&&Number.isFinite(reviewRead.expiresAt)&&Date.now()<reviewRead.expiresAt;
     if(!fullAccess&&!readAccess)return res.status(401).json({ok:false,error:'Unauthorized'});next();
   });
