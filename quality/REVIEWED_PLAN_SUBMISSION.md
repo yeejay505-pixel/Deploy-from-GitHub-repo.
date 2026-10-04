@@ -41,3 +41,11 @@ Office lifecycle scenes coexisting with source counters use the compact supporte
 ## Evidence
 
 `verify-reviewed-plan-path.mjs` tests default gates, explicit review, invented citations/numbers, changed source bytes, source/plan fingerprints, immutable original provider results, append-only version history, idempotency, restart, concurrent submissions, authentication and pinned render provenance. It also accepts the actual commercial PPTX and 13-beat reviewed plan for offline source-to-revision-to-queue validation. Provider failures in tests are synthetic, never a live accepted model response.
+
+## Operator-pinned live rendering and private review retrieval
+
+A trusted server deployment can enqueue an already-stored reviewed revision without another n8n edit. Set `INTAKE_RENDER_PINNED_REVIEW` to JSON containing its exact `event_id`, `revision_id` and `plan_hash`; set `INTAKE_RENDER_WORKER_EVENT_ID` to the same event and enable the guide/worker gates. Missing/mismatched scope or hash stops startup. The ordinary revision/source/receipt checks and frozen queue deduplication still apply. An existing review failure is never converted into a model response or reset. Repeated deployment cannot enqueue a different revision or regenerate a completed video.
+
+A separate temporary `INTAKE_REVIEW_READ_TOKEN` can retrieve only GET render status and verified render artifacts for `INTAKE_REVIEW_READ_EVENT_ID`, until the Unix-millisecond deadline `INTAKE_REVIEW_READ_EXPIRES_AT`. It does not grant source, intelligence, write, model-call or cross-job access. It is passed only as an Authorization bearer header; never publish it, put it in URLs or commit it. The original intake credential remains unchanged. Disable the worker/pin and revoke or expire this scoped token after the bounded review run.
+
+`verify-pinned-review-render.mjs` checks exact scope/hash, duplicate activation, worker isolation, read-only access boundaries, existing intake access and expiry across restart.

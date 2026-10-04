@@ -74,10 +74,10 @@ export class RenderAdapter {
    const now=this.store.now();this.store.db.prepare("INSERT INTO render_runs(event_id,input_hash,input,status,stage,created_at,updated_at) VALUES(?,?,?,'queued','queued',?,?)").run(id,inputHash,JSON.stringify(input),now,now);this.store.log(id,'render_queued',{input_hash:inputHash,voice:'guide'});return {duplicate:false,...this.get(id)};
   });
  }
- claim(){
+ claim(eventId=''){
   if(!this.guideEnabled)return null;
   return this.store.transaction(()=>{
-   const row=this.store.db.prepare("SELECT * FROM render_runs WHERE status='queued' OR (status='running' AND lease_until<=?) ORDER BY created_at,event_id LIMIT 1").get(this.store.now());if(!row)return null;
+   const row=this.store.db.prepare("SELECT * FROM render_runs WHERE (status='queued' OR (status='running' AND lease_until<=?))"+(eventId?" AND event_id=?":"")+" ORDER BY created_at,event_id LIMIT 1").get(...(eventId?[this.store.now(),eventId]:[this.store.now()]));if(!row)return null;
    const input=JSON.parse(row.input);
    if(jsonHash(input)!==row.input_hash||input.runtime_hash!==this.runtimeHash||row.attempts>=MAX_RENDER_ATTEMPTS){const error=row.attempts>=MAX_RENDER_ATTEMPTS?'render_attempt_limit_reached':input.runtime_hash!==this.runtimeHash?'render_runtime_changed':'render_input_integrity_failed';this.store.db.prepare("UPDATE render_runs SET status='review_required',stage='review',error=?,updated_at=? WHERE event_id=?").run(error,this.store.now(),row.event_id);this.store.log(row.event_id,'render_review_required',{error});return null;}
    const token=randomUUID(),now=this.store.now();this.store.db.prepare("UPDATE render_runs SET status='running',stage='materializing',lease_token=?,lease_until=?,attempts=attempts+1,progress=NULL,error=NULL,updated_at=? WHERE event_id=?").run(token,now+RENDER_LEASE_MS,now,row.event_id);this.store.log(row.event_id,'render_reserved',{attempt:row.attempts+1,recovered:row.status==='running'});return {id:row.event_id,token,input,inputHash:row.input_hash};

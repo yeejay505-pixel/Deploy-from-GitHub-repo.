@@ -43,10 +43,10 @@ export async function runSourceRenderPipeline(directory,{signal,progress=()=>{}}
 }
 
 export class DurableRenderWorker {
- constructor(adapter,{pipeline=runSourceRenderPipeline,pollMs=1000}={}){this.adapter=adapter;this.pipeline=pipeline;this.pollMs=pollMs;this.active=null;this.stopped=false;this.controller=null;this.timer=null;}
+ constructor(adapter,{pipeline=runSourceRenderPipeline,pollMs=1000,eventId=''}={}){this.adapter=adapter;this.eventId=eventId;this.pipeline=pipeline;this.pollMs=pollMs;this.active=null;this.stopped=false;this.controller=null;this.timer=null;}
  async runOnce(){
   if(this.active||this.stopped)return null;
-  const claim=this.adapter.claim();if(!claim)return null;
+  const claim=this.adapter.claim(this.eventId);if(!claim)return null;
   this.controller=new AbortController();const signal=this.controller.signal;let stage='materializing',progress=null;
   const heartbeat=setInterval(()=>{try{this.adapter.heartbeat(claim.id,claim.token,stage,progress);}catch{this.controller?.abort();}},5000);heartbeat.unref();
   const execute=async()=>{

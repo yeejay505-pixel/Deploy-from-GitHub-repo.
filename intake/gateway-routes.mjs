@@ -8,9 +8,10 @@ import {extractRetainedSource} from './source-extractor.mjs';
 import {IntelligenceAdapter} from '../intelligence/adapter-store.mjs';
 import {ReviewedPlanAdapter} from '../intelligence/reviewed-plan-store.mjs';
 import {RenderAdapter} from './render-adapter.mjs';
+import {enqueuePinnedReview} from './pinned-review-render.mjs';
 import {DurableRenderWorker} from './render-worker.mjs';
 
-export function createIntakeRoutes({app,directory,token,profile,allowedChatIds,bindings={},durableStorageConfirmed=false,forbiddenDirectories=[],intelligence={},render={},reviewedPlans={}}){
+export function createIntakeRoutes({app,directory,token,profile,allowedChatIds,bindings={},durableStorageConfirmed=false,forbiddenDirectories=[],intelligence={},render={},reviewedPlans={},reviewRead={}}){
   if(!directory||!token||!durableStorageConfirmed)throw new GatewayError('intake_storage_and_auth_configuration_required',503);
   if(!path.isAbsolute(directory))throw new GatewayError('absolute_store_directory_required',503);
   fs.mkdirSync(directory,{recursive:true,mode:0o700});
@@ -20,12 +21,17 @@ export function createIntakeRoutes({app,directory,token,profile,allowedChatIds,b
   const adapter=new IntelligenceAdapter(store,intelligence);
   const reviewer=new ReviewedPlanAdapter(store,reviewedPlans);
   const renderer=new RenderAdapter(store,{directory,...render});
-  const renderWorker=render.workerEnabled===true?new DurableRenderWorker(renderer):null;
+  const renderWorker=render.workerEnabled===true?new DurableRenderWorker(renderer,{eventId:render.workerEventId??''}):null;
   if(renderWorker&&!render.guideEnabled)throw new GatewayError('local_guide_adapter_must_be_configured',503);
   const router=express.Router();
   router.use((req,res,next)=>{
     const provided=Buffer.from(req.get('authorization')??''),expected=Buffer.from('Bearer '+token);
-    if(provided.length!==expected.length||!timingSafeEqual(provided,expected))return res.status(401).json({ok:false,error:'Unauthorized'});next();
+    const fullAccess=provided.length===expected.length&&timingSafeEqual(provided,expected);
+    const readToken=typeof reviewRead.token==='string'&&reviewRead.token.length>=32?Buffer.from('Bearer '+reviewRead.token):null;
+    const eventPath='/jobs/'+encodeURIComponent(reviewRead.eventId??'')+'/render';
+    const allowedPath=req.path===eventPath||req.path.startsWith(eventPath+'/artifacts/')&&/^[A-Za-z0-9-]+$/.test(req.path.slice((eventPath+'/artifacts/').length));
+    const readAccess=readToken&&provided.length===readToken.length&&timingSafeEqual(provided,readToken)&&req.method==='GET'&&allowedPath&&Number.isFinite(reviewRead.expiresAt)&&Date.now()<reviewRead.expiresAt;
+    if(!fullAccess&&!readAccess)return res.status(401).json({ok:false,error:'Unauthorized'});next();
   });
   router.use(express.json({limit:'1mb'}));
   const upload=multer({storage:multer.memoryStorage(),limits:{fileSize:MAX_SOURCE_BYTES,files:1,fields:2,fieldSize:1024*1024}});
@@ -69,6 +75,8 @@ export function createIntakeRoutes({app,directory,token,profile,allowedChatIds,b
     res.status(known?error.status:isUpload?400:500).json({ok:false,error:known?error.code:isUpload?'source_upload_limit_or_field_invalid':'intake_internal_error',release_eligible:false});
   });
   app.use('/intake',router);
+  const pinned=enqueuePinnedReview({reviewer,renderer,pin:render.pinnedReview,workerEnabled:render.workerEnabled,workerEventId:render.workerEventId});
+  if(pinned)console.log('Pinned reviewed render:',JSON.stringify(pinned));
   renderWorker?.start();
   return {store,adapter,reviewer,renderer,renderWorker,close:()=>renderWorker?renderWorker.stop().then(()=>store.close()):store.close()};
 }
