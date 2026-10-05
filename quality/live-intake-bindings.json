@@ -5,5 +5,12 @@
     "contract": "intake-handoff.v1",
     "profile_id": "commercial-explainer-v05",
     "benchmark_sha256": "bbe16b9b82eb225ee9c6f781c1573a4f6d439ca53e85f316f0c68bdd509c23f4"
+  },
+  "research_story": {
+    "workflow_id": "YsMNYZNPwk3g9xNb",
+    "stage": "intelligence",
+    "contract": "intake-handoff.v1",
+    "profile_id": "commercial-explainer-v05",
+    "benchmark_sha256": "bbe16b9b82eb225ee9c6f781c1573a4f6d439ca53e85f316f0c68bdd509c23f4"
   }
 }
