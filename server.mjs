@@ -397,7 +397,7 @@ async function renderUniversalOne(body,req){
   await fs.mkdir(frameDir,{recursive:true});
 
   try{
-    await renderFrames({
+    const renderAttempt=()=>renderFrames({
       composition,
       serveUrl,
       outputDir:frameDir,
@@ -412,7 +412,21 @@ async function renderUniversalOne(body,req){
       chromiumOptions:{enableMultiProcessOnLinux:false}
     });
 
-    await new Promise(r=>setTimeout(r,250));
+    await renderAttempt();
+    await new Promise(r=>setTimeout(r,500));
+
+    let frames=(await fs.readdir(frameDir).catch(()=>[])).filter(x=>/^element-\d+\.jpeg$/i.test(x));
+    if(!frames.length){
+      console.warn('No frames after first universal render attempt; retrying scene',sceneManifest.scene_id);
+      await fs.rm(frameDir,{recursive:true,force:true}).catch(()=>{});
+      await fs.mkdir(frameDir,{recursive:true});
+      await renderAttempt();
+      await new Promise(r=>setTimeout(r,750));
+      frames=(await fs.readdir(frameDir).catch(()=>[])).filter(x=>/^element-\d+\.jpeg$/i.test(x));
+    }
+    if(!frames.length){
+      throw new Error(`Universal renderer produced zero JPEG frames for ${sceneManifest.scene_id}`);
+    }
 
     const pattern=path.join(frameDir,'element-%03d.jpeg');
     await new Promise((resolve,reject)=>{
