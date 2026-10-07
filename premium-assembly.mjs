@@ -22,6 +22,19 @@ const publicBase=(req)=>{
   return `${xf||req.protocol||'https'}://${req.get('host')}`;
 };
 
+const normalizeUrl=(u)=>{
+  let s=String(u||'');
+  if(s.startsWith('http://')&&s.includes('.up.railway.app'))s='https://'+s.slice(7);
+  return s;
+};
+
+async function download(url,dest){
+  const r=await fetch(normalizeUrl(url),{redirect:'follow'});
+  if(!r.ok)throw new Error(`Failed to download ${url}: HTTP ${r.status}`);
+  const ab=await r.arrayBuffer();
+  await fs.writeFile(dest,Buffer.from(ab));
+}
+
 function uploadedFile(req,name){
   if(Array.isArray(req.files))return req.files.find(f=>String(f.fieldname||'')===String(name))||null;
   return req.files?.[name]?.[0]||null;
@@ -207,7 +220,7 @@ export function createPremiumAssemblyHandler({here,outputs}){
 
       for(const s of scenes){
         const field=`scene_${s.sceneId}`;
-        if(!uploadedFile(req,field))throw new Error(`Missing multipart scene file ${field}`);
+        if(!uploadedFile(req,field)&&!String(s.url||'').trim())throw new Error(`Missing scene source for ${s.sceneId}`);
       }
 
       workDir=path.join(here,'premium-assembly-cache',`${safe(projectId)}_${Date.now()}`);
@@ -221,7 +234,8 @@ export function createPremiumAssemblyHandler({here,outputs}){
         const s=scenes[i];
         const srcUpload=uploadedFile(req,`scene_${s.sceneId}`);
         const src=path.join(workDir,`${s.sceneId}_src.mp4`);
-        await fs.copyFile(srcUpload.path,src);
+        if(srcUpload?.path)await fs.copyFile(srcUpload.path,src);
+        else await download(s.url,src);
 
         const start=num(s.startSec,0),end=num(s.endSec,start+num(s.durationSec,0));
         const pre=i===0?Math.max(0,start):0;
