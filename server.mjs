@@ -397,35 +397,81 @@ async function renderUniversalOne(body,req){
   await fs.mkdir(frameDir,{recursive:true});
 
   try{
-    const renderAttempt=()=>renderFrames({
-      composition,
-      serveUrl,
-      outputDir:frameDir,
-      inputProps,
-      imageFormat:'jpeg',
-      jpegQuality:scale===1?82:74,
-      scale,
-      concurrency:1,
-      muted:true,
-      logLevel:'warn',
-      browserExecutable:process.env.REMOTION_BROWSER_EXECUTABLE||undefined,
-      chromiumOptions:{enableMultiProcessOnLinux:false}
-    });
+    const expectedFrames=Math.max(1,Number(composition.durationInFrames||0));
+    const shortScene=(expectedFrames/Number(composition.fps||30))<=5;
+    const maxAttempts=shortScene?3:2;
 
-    await renderAttempt();
-    await new Promise(r=>setTimeout(r,500));
-
-    let frames=(await fs.readdir(frameDir).catch(()=>[])).filter(x=>/^element-\d+\.jpeg$/i.test(x));
-    if(!frames.length){
-      console.warn('No frames after first universal render attempt; retrying scene',sceneManifest.scene_id);
+    const renderAttempt=async(attempt)=>{
       await fs.rm(frameDir,{recursive:true,force:true}).catch(()=>{});
       await fs.mkdir(frameDir,{recursive:true});
-      await renderAttempt();
-      await new Promise(r=>setTimeout(r,750));
-      frames=(await fs.readdir(frameDir).catch(()=>[])).filter(x=>/^element-\d+\.jpeg$/i.test(x));
+
+      await renderFrames({
+        composition,
+        serveUrl,
+        outputDir:frameDir,
+        inputProps,
+        imageFormat:'jpeg',
+        jpegQuality:scale===1?82:74,
+        scale,
+        concurrency:1,
+        muted:true,
+        logLevel:'warn',
+        browserExecutable:process.env.REMOTION_BROWSER_EXECUTABLE||undefined,
+        chromiumOptions:{enableMultiProcessOnLinux:false}
+      });
+
+      await new Promise(r=>setTimeout(r,shortScene?900:600));
+
+      const frames=(await fs.readdir(frameDir).catch(()=>[]))
+        .filter(x=>/^element-\d+\.jpeg$/i.test(x))
+        .sort((a,b)=>{
+          const ai=Number((a.match(/(\d+)/)||[])[1]||0);
+          const bi=Number((b.match(/(\d+)/)||[])[1]||0);
+          return ai-bi;
+        });
+
+      const indexes=frames.map(x=>Number((x.match(/(\d+)/)||[])[1]||-1));
+      const unique=new Set(indexes);
+      const first=indexes.length?Math.min(...indexes):-1;
+      const last=indexes.length?Math.max(...indexes):-1;
+      const contiguous=indexes.length===unique.size &&
+        first===0 &&
+        last===expectedFrames-1 &&
+        indexes.length===expectedFrames;
+
+      console.log('universal frame validation',{
+        sceneId:sceneManifest.scene_id,
+        attempt,
+        shortScene,
+        expectedFrames,
+        actualFrames:frames.length,
+        firstFrame:first,
+        lastFrame:last,
+        contiguous
+      });
+
+      return {frames,indexes,contiguous,first,last};
+    };
+
+    let validation=null;
+    for(let attempt=1;attempt<=maxAttempts;attempt++){
+      validation=await renderAttempt(attempt);
+      if(validation.contiguous) break;
+      if(attempt<maxAttempts){
+        console.warn(
+          'Universal frame validation failed; retrying scene',
+          sceneManifest.scene_id,
+          `attempt ${attempt}/${maxAttempts}`,
+          `expected ${expectedFrames}, got ${validation.frames.length}`
+        );
+        await new Promise(r=>setTimeout(r,shortScene?1000:700));
+      }
     }
-    if(!frames.length){
-      throw new Error(`Universal renderer produced zero JPEG frames for ${sceneManifest.scene_id}`);
+
+    if(!validation?.contiguous){
+      throw new Error(
+        `Universal renderer frame validation failed for ${sceneManifest.scene_id}: expected ${expectedFrames} contiguous JPEG frames (0-${expectedFrames-1}), got ${validation?.frames?.length||0}; first=${validation?.first??-1}, last=${validation?.last??-1}`
+      );
     }
 
     const pattern=path.join(frameDir,'element-%03d.jpeg');
