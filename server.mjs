@@ -475,21 +475,57 @@ async function renderUniversalOne(body,req){
     }
 
     const pattern=path.join(frameDir,'element-%03d.jpeg');
-    await new Promise((resolve,reject)=>{
-      const args=[
-        '-y','-framerate',String(composition.fps),'-i',pattern,
-        '-c:v','libx264','-preset','superfast','-crf',scale===1?'18':'21',
-        '-pix_fmt','yuv420p','-movflags','+faststart',outputLocation
-      ];
-      const ff=spawn('ffmpeg',args,{stdio:['ignore','pipe','pipe']});
-      let stderr='';
-      ff.stderr.on('data',d=>{stderr+=d.toString();if(stderr.length>12000)stderr=stderr.slice(-12000);});
-      ff.on('error',reject);
-      ff.on('close',(code,signal)=>{
-        if(code===0)return resolve();
-        reject(new Error(`Universal FFmpeg failed with code ${code}${signal?` (${signal})`:''}: ${stderr.slice(-5000)}`));
+
+    const encodeAttempt=async(attempt)=>{
+      await fs.rm(outputLocation,{force:true}).catch(()=>{});
+      return await new Promise((resolve,reject)=>{
+        const args=[
+          '-y','-framerate',String(composition.fps),'-i',pattern,
+          '-c:v','libx264','-preset','superfast','-crf',scale===1?'18':'21',
+          '-pix_fmt','yuv420p','-movflags','+faststart',outputLocation
+        ];
+        const ff=spawn('ffmpeg',args,{stdio:['ignore','pipe','pipe']});
+        let stderr='';
+        ff.stderr.on('data',d=>{stderr+=d.toString();if(stderr.length>12000)stderr=stderr.slice(-12000);});
+        ff.on('error',reject);
+        ff.on('close',async(code,signal)=>{
+          if(code!==0){
+            return reject(new Error(`Universal FFmpeg failed with code ${code}${signal?` (${signal})`:''}: ${stderr.slice(-5000)}`));
+          }
+          try{
+            const stat=await fs.stat(outputLocation);
+            if(!(stat.size>1024)) return reject(new Error(`Universal FFmpeg produced invalid output for ${sceneManifest.scene_id}: ${stat.size} bytes`));
+            return resolve({size:stat.size,attempt});
+          }catch(e){
+            return reject(new Error(`Universal FFmpeg output missing for ${sceneManifest.scene_id}: ${e?.message||e}`));
+          }
+        });
       });
-    });
+    };
+
+    let encodeResult=null;
+    let encodeError=null;
+    for(let attempt=1;attempt<=3;attempt++){
+      try{
+        encodeResult=await encodeAttempt(attempt);
+        console.log('universal ffmpeg encode success',{
+          sceneId:sceneManifest.scene_id,
+          attempt,
+          outputBytes:encodeResult.size
+        });
+        encodeError=null;
+        break;
+      }catch(e){
+        encodeError=e;
+        console.warn('universal ffmpeg encode attempt failed',{
+          sceneId:sceneManifest.scene_id,
+          attempt,
+          error:compactError(e)
+        });
+        if(attempt<3) await new Promise(r=>setTimeout(r,800*attempt));
+      }
+    }
+    if(encodeError) throw encodeError;
   }finally{
     await fs.rm(frameDir,{recursive:true,force:true}).catch(()=>{});
   }
