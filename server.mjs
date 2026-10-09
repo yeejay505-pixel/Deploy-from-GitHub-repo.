@@ -752,7 +752,7 @@ app.post('/refresh-scenes',async(req,res)=>{
   });
 });
 
-app.post('/audit-frames',createAuditFramesHandler({outputs}));
+app.post('/audit-frames',upload.single('video'),createAuditFramesHandler({outputs}));
 
 app.post('/assemble-final',upload.single('voice'),createAssemblyHandler({here,outputs}));
 
