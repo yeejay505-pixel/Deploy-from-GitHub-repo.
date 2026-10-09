@@ -35,10 +35,23 @@ function parseProps(v){
   return {};
 }
 
+function isInternalText(v){
+  const s=String(v??'').trim();
+  if(!s) return true;
+  if(/^[a-z0-9]+(?:_[a-z0-9]+)+$/i.test(s)) return true;
+  if(/^(generic|headline|layout|asset|component|renderer|stage|upper|lower|left|right)_/i.test(s)) return true;
+  return false;
+}
+
+function cleanText(v,fallback=''){
+  const s=String(v??'').trim();
+  return s && !isInternalText(s) ? s : fallback;
+}
+
 function textValues(v,out=[]){
   if(v==null) return out;
   if(typeof v==='string'){
-    const s=v.trim();
+    const s=cleanText(v);
     if(s && s.length<180) out.push(s);
     return out;
   }
@@ -52,7 +65,7 @@ function textValues(v,out=[]){
   }
   if(typeof v==='object'){
     for(const [k,x] of Object.entries(v)){
-      if(/url|src|color|hex|id|path/i.test(k)) continue;
+      if(/url|src|color|hex|id|path|position|anchor|slot|region|layer/i.test(k)) continue;
       textValues(x,out);
     }
   }
@@ -113,14 +126,25 @@ const Panel=({x,y,w,h,color=C.panel,children,border=C.line,opacity=1})=>
 
 const GenericText=({c})=>{
   const p=parseProps(c.props);
-  const texts=textValues(p);
-  const main=texts[0]||c.purpose||c.data_binding||c.component_id;
-  const sub=texts[1]||'';
+  const explicitMain=[
+    p.text,p.headline,p.title,p.copy,p.label,p.value,c.purpose,c.data_binding
+  ].map(v=>cleanText(v)).find(Boolean)||'';
+  const explicitSub=[
+    p.subtitle,p.subhead,p.secondary_text,p.kicker
+  ].map(v=>cleanText(v)).find(Boolean)||'';
   const col=accent(c.persistent_object_id||c.instance_id);
+  if(!explicitMain) return null;
   return <>
-    <Headline text={main}/>
-    {sub?<Headline text={sub} small y={285} color={col}/>:null}
+    <Headline text={explicitMain}/>
+    {explicitSub?<Headline text={explicitSub} small y={285} color={col}/>:null}
   </>;
+};
+
+const TagLabel=({c})=>{
+  const p=parseProps(c.props);
+  const text=[p.text,p.label,p.title,p.copy,c.purpose].map(v=>cleanText(v)).find(Boolean)||'';
+  if(!text) return null;
+  return <Label text={text} color={accent(c.persistent_object_id||c.instance_id)}/>;
 };
 
 const StatCard=({c})=>{
@@ -148,16 +172,19 @@ const ProgressMeter=({c})=>{
   const f=useCurrentFrame();
   const p=parseProps(c.props);
   const texts=textValues(p);
-  const raw=Number(String(texts.find(x=>/%/.test(x))||'65').replace(/[^0-9.]/g,''));
-  const pct=Math.max(0,Math.min(100,Number.isFinite(raw)?raw:65));
+  const pctText=texts.find(x=>/%/.test(x));
+  const raw=pctText==null?NaN:Number(String(pctText).replace(/[^0-9.]/g,''));
+  const hasPct=Number.isFinite(raw);
+  const pct=hasPct?Math.max(0,Math.min(100,raw)):100;
   const col=accent(c.instance_id);
   const shown=interpolate(f,[0,24],[0,pct],clamp);
+  const title=cleanText(p.title)||cleanText(p.text)||cleanText(c.purpose,'PROGRESS');
   return <>
-    <Headline text={texts[0]||c.purpose||'PROGRESS'} small/>
+    <Headline text={title} small/>
     <div style={{position:'absolute',left:110,right:110,top:700,height:86,borderRadius:50,background:'#E9EDF3',overflow:'hidden'}}>
       <div style={{height:'100%',width:`${shown}%`,background:col,borderRadius:50}}/>
     </div>
-    <div style={{position:'absolute',left:110,right:110,top:820,fontSize:76,fontWeight:900,color:col,textAlign:'center'}}>{Math.round(shown)}%</div>
+    {hasPct?<div style={{position:'absolute',left:110,right:110,top:820,fontSize:76,fontWeight:900,color:col,textAlign:'center'}}>{Math.round(shown)}%</div>:null}
   </>;
 };
 
@@ -165,19 +192,21 @@ const BarChart=({c})=>{
   const f=useCurrentFrame();
   const p=parseProps(c.props);
   const texts=textValues(p);
-  const labels=(Array.isArray(p.labels)?p.labels:texts.slice(0,4)).slice(0,4);
-  const values=Array.isArray(p.values)?p.values.map(Number):labels.map((_,i)=>[58,84,67,94][i]||60);
-  const max=Math.max(1,...values.map(v=>Number.isFinite(v)?v:0));
+  const labels=(Array.isArray(p.labels)?p.labels.map(x=>cleanText(x)).filter(Boolean):texts.slice(0,4)).slice(0,4);
+  const hasValues=Array.isArray(p.values)&&p.values.length>0&&p.values.every(v=>Number.isFinite(Number(v)));
+  const values=hasValues?p.values.slice(0,4).map(Number):Array.from({length:Math.max(1,labels.length||3)},()=>1);
+  const max=Math.max(1,...values);
+  const title=cleanText(p.title)||cleanText(c.purpose,'COMPARISON');
   return <>
-    <Headline text={p.title||c.purpose||'COMPARISON'} small/>
+    <Headline text={title} small/>
     <div style={{position:'absolute',left:120,right:120,top:500,bottom:340,display:'flex',alignItems:'flex-end',gap:38}}>
-      {values.slice(0,4).map((v,i)=>{
+      {values.map((v,i)=>{
         const h=(Number(v)||0)/max*700*prog(f,5+i*4,28+i*4);
         const col=accent((c.instance_id||'')+i);
         return <div key={i} style={{flex:1,display:'flex',flexDirection:'column',justifyContent:'flex-end',alignItems:'center',gap:18}}>
-          <div style={{fontSize:28,fontWeight:900,color:col}}>{String(v)}</div>
+          {hasValues?<div style={{fontSize:28,fontWeight:900,color:col}}>{String(v)}</div>:null}
           <div style={{width:'100%',height:h,borderRadius:'20px 20px 4px 4px',background:col}}/>
-          <div style={{fontSize:24,fontWeight:800,textAlign:'center',minHeight:60}}>{labels[i]||`Item ${i+1}`}</div>
+          <div style={{fontSize:24,fontWeight:800,textAlign:'center',minHeight:60}}>{labels[i]||''}</div>
         </div>;
       })}
     </div>
@@ -207,17 +236,20 @@ const Donut=({c})=>{
   const f=useCurrentFrame();
   const p=parseProps(c.props);
   const texts=textValues(p);
-  const raw=Number(String(texts.find(x=>/%/.test(x))||p.value||65).replace(/[^0-9.]/g,''));
-  const pct=Math.max(0,Math.min(100,Number.isFinite(raw)?raw:65));
+  const pctText=texts.find(x=>/%/.test(x))??p.value;
+  const raw=Number(String(pctText??'').replace(/[^0-9.]/g,''));
+  const hasPct=Number.isFinite(raw);
+  const pct=hasPct?Math.max(0,Math.min(100,raw)):0;
   const r=210,circ=2*Math.PI*r,shown=pct/100*circ*prog(f,0,25);
   const col=accent(c.instance_id);
+  const title=cleanText(p.title)||cleanText(c.purpose,'SHARE');
   return <>
-    <Headline text={p.title||c.purpose||'SHARE'} small/>
+    <Headline text={title} small/>
     <svg width="1080" height="1200" style={{position:'absolute',top:380}}>
       <circle cx="540" cy="480" r={r} fill="none" stroke="#E7EBF0" strokeWidth="70"/>
-      <circle cx="540" cy="480" r={r} fill="none" stroke={col} strokeWidth="70" strokeLinecap="round"
-        strokeDasharray={circ} strokeDashoffset={circ-shown} transform="rotate(-90 540 480)"/>
-      <text x="540" y="505" textAnchor="middle" fontSize="94" fontWeight="900" fill={C.ink}>{Math.round(pct)}%</text>
+      {hasPct?<circle cx="540" cy="480" r={r} fill="none" stroke={col} strokeWidth="70" strokeLinecap="round"
+        strokeDasharray={circ} strokeDashoffset={circ-shown} transform="rotate(-90 540 480)"/>:null}
+      {hasPct?<text x="540" y="505" textAnchor="middle" fontSize="94" fontWeight="900" fill={C.ink}>{Math.round(pct)}%</text>:null}
     </svg>
   </>;
 };
@@ -226,7 +258,7 @@ const Flow=({c,mode='flow'})=>{
   const f=useCurrentFrame();
   const p=parseProps(c.props);
   const texts=textValues(p);
-  const labels=(Array.isArray(p.steps)?p.steps:texts.length?texts:['INPUT','MECHANISM','OUTPUT']).slice(0,5);
+  const labels=(Array.isArray(p.steps)?p.steps.map(x=>cleanText(x)).filter(Boolean):texts.length?texts:['INPUT','MECHANISM','OUTPUT']).slice(0,5);
   const col=accent(c.persistent_object_id||c.instance_id);
   return <>
     <Headline text={p.title||c.purpose||'MECHANISM'} small/>
@@ -289,7 +321,7 @@ const Compare=({c})=>{
 const Timeline=({c})=>{
   const f=useCurrentFrame();
   const p=parseProps(c.props);
-  const t=(Array.isArray(p.events)?p.events:textValues(p)).slice(0,5);
+  const t=(Array.isArray(p.events)?p.events.map(x=>cleanText(x)).filter(Boolean):textValues(p)).slice(0,5);
   const events=t.length?t:['START','CHANGE','RESULT'];
   const col=accent(c.instance_id);
   return <>
@@ -406,7 +438,8 @@ const Custom=({c})=>{
 function ComponentView({c,pkg}){
   const id=String(c.component_id||'').toLowerCase();
   if(id==='layout_stage_9x16') return null;
-  if(id==='headline_block'||id==='label_tag'||id==='kinetic_phrase'||id==='callout_box') return <GenericText c={c}/>;
+  if(id==='label_tag') return <TagLabel c={c}/>;
+  if(id==='headline_block'||id==='kinetic_phrase'||id==='callout_box') return <GenericText c={c}/>;
   if(id==='stat_card'||id==='counter') return <StatCard c={c}/>;
   if(id==='progress_meter') return <ProgressMeter c={c}/>;
   if(id==='bar_chart') return <BarChart c={c}/>;
@@ -439,10 +472,46 @@ const Layer=({c,pkg,sceneStart})=>{
   </Sequence>;
 };
 
+function prepareComponents(raw,start,end){
+  const list=(Array.isArray(raw)?raw:[]).map(c=>({...c})).sort((a,b)=>{
+    const sa=num(a.start_sec,start),sb=num(b.start_sec,start);
+    if(sa!==sb) return sa-sb;
+    return num(a.layer)-num(b.layer);
+  });
+
+  const headlineIds=new Set(['headline_block','kinetic_phrase','callout_box']);
+  const headlines=list.filter(c=>headlineIds.has(String(c.component_id||'').toLowerCase()));
+
+  for(let i=0;i<headlines.length-1;i++){
+    const cur=headlines[i];
+    const next=headlines[i+1];
+    const nextStart=num(next.start_sec,start);
+    const curStart=num(cur.start_sec,start);
+    const curEnd=num(cur.end_sec,end);
+    if(nextStart>curStart && nextStart<curEnd){
+      cur.end_sec=Math.max(curStart+.15,nextStart-.04);
+    }
+  }
+
+  const meaningful=list.filter(c=>{
+    const id=String(c.component_id||'').toLowerCase();
+    return !['layout_stage_9x16','headline_block','kinetic_phrase','callout_box','label_tag','highlight_ring'].includes(id);
+  });
+
+  const coveragePool=meaningful.length?meaningful:list.filter(c=>String(c.component_id||'').toLowerCase()!=='layout_stage_9x16');
+  if(coveragePool.length){
+    const last=coveragePool.reduce((best,c)=>num(c.end_sec,start)>num(best.end_sec,start)?c:best,coveragePool[0]);
+    if(end-num(last.end_sec,start)>.25) last.end_sec=end;
+  }
+
+  return list.sort((a,b)=>num(a.layer)-num(b.layer));
+}
+
 export const ProductionMaster=({package:pkg})=>{
   const s=pkg?.sceneManifest||{};
   const start=num(s.start_sec,0);
-  const components=Array.isArray(s.components)?[...s.components].sort((a,b)=>num(a.layer)-num(b.layer)):[];
+  const end=num(s.end_sec,start+1);
+  const components=prepareComponents(s.components,start,end);
   const fallback={
     instance_id:`${s.scene_id||'scene'}-fallback`,
     component_id:'headline_block',
@@ -450,7 +519,7 @@ export const ProductionMaster=({package:pkg})=>{
     purpose:String(s.scene_id||'SCENE'),
     layer:1,
     start_sec:start,
-    end_sec:num(s.end_sec,start+1),
+    end_sec:end,
     props:{text:String(s.scene_id||'SCENE')}
   };
   const list=components.length?components:[fallback];
