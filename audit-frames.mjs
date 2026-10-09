@@ -136,7 +136,7 @@ export function createAuditFramesHandler({outputs}){
     const requestedCount=Math.max(6,Math.min(20,Number(body.sampleCount||body.sample_count||14)));
     const requestedTs=Array.isArray(body.timestamps)?body.timestamps.map(Number).filter(Number.isFinite):[];
 
-    if(!videoUrl) return res.status(400).json({ok:false,error:'Missing videoUrl'});
+    if(!req.file && !videoUrl) return res.status(400).json({ok:false,error:'Missing video file or videoUrl'});
 
     const auditId=safePart(body.auditId||`audit-${Date.now()}`);
     const dir=path.join(outputs,`${projectId}_${auditId}_frames`);
@@ -146,7 +146,19 @@ export function createAuditFramesHandler({outputs}){
     const sourcePath=path.join(dir,'source.mp4');
 
     try{
-      const download=await downloadVideoSource(videoUrl,sourcePath);
+      let download;
+      if(req.file){
+        await fs.copyFile(req.file.path,sourcePath);
+        await fs.rm(req.file.path,{force:true}).catch(()=>{});
+        const st=await fs.stat(sourcePath);
+        download={
+          url:'multipart-upload',
+          size:st.size,
+          contentType:String(req.file.mimetype||'video/mp4')
+        };
+      }else{
+        download=await downloadVideoSource(videoUrl,sourcePath);
+      }
 
       const probe=await run('ffprobe',[
         '-v','error','-show_entries','format=duration',
@@ -214,7 +226,7 @@ export function createAuditFramesHandler({outputs}){
         schema_version:'visual-audit-frames.v1',
         project_id:projectId,
         audit_id:auditId,
-        source_video_url:videoUrl,
+        source_video_url:videoUrl||'multipart-upload',
         resolved_video_url:download.url,
         source_video_bytes:download.size,
         source_video_content_type:download.contentType,
