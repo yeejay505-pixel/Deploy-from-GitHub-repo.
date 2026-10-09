@@ -827,7 +827,7 @@ export function createPremiumAssemblyHandler({
           `[voice][sfx][music]`+
           `amix=inputs=3:normalize=0:duration=longest,`+
           `loudnorm=I=-14:TP=-2:LRA=7,`+
-          `alimiter=limit=.79[a]`,
+          `alimiter=limit=.79:level=false[a]`,
 
           '-map','[v]',
           '-map','[a]',
@@ -951,7 +951,7 @@ if(
         '-map','0:v:0',
         '-map','0:a:0',
         '-c:v','copy',
-        '-af',`volume=${gainDb.toFixed(2)}dB,alimiter=limit=.79`,
+        '-af',`volume=${gainDb.toFixed(2)}dB,alimiter=limit=.79:level=false`,
         '-c:a','aac',
         '-b:a','192k',
         '-movflags','+faststart',
