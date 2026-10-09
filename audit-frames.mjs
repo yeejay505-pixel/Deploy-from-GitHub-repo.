@@ -35,6 +35,76 @@ async function run(cmd,args,{capture=true}={}){
   });
 }
 
+function extractGoogleDriveId(url=''){
+  const s=String(url||'').trim();
+  const m=s.match(/\/file\/d\/([^/?#]+)/) || s.match(/[?&]id=([^&#]+)/);
+  return m?decodeURIComponent(m[1]):'';
+}
+
+async function downloadVideoSource(videoUrl,sourcePath){
+  const driveId=extractGoogleDriveId(videoUrl);
+  const candidates=[];
+
+  if(driveId){
+    candidates.push(
+      `https://drive.usercontent.google.com/download?id=${encodeURIComponent(driveId)}&export=download&confirm=t`,
+      `https://drive.google.com/uc?export=download&id=${encodeURIComponent(driveId)}&confirm=t`
+    );
+  }
+
+  candidates.push(videoUrl);
+
+  const tried=[];
+  for(const candidate of [...new Set(candidates)]){
+    try{
+      const response=await fetch(candidate,{
+        redirect:'follow',
+        headers:{
+          'user-agent':'Mozilla/5.0',
+          'accept':'video/mp4,application/octet-stream,*/*'
+        }
+      });
+
+      const contentType=String(response.headers.get('content-type')||'').toLowerCase();
+      tried.push({url:candidate,status:response.status,contentType});
+
+      if(!response.ok||!response.body) continue;
+
+      if(contentType.includes('text/html')){
+        await response.body.cancel().catch(()=>{});
+        continue;
+      }
+
+      await fs.rm(sourcePath,{force:true}).catch(()=>{});
+      await pipeline(Readable.fromWeb(response.body),createWriteStream(sourcePath));
+
+      const st=await fs.stat(sourcePath).catch(()=>null);
+      if(!st||st.size<1024){
+        await fs.rm(sourcePath,{force:true}).catch(()=>{});
+        continue;
+      }
+
+      const fh=await fs.open(sourcePath,'r');
+      const head=Buffer.alloc(32);
+      await fh.read(head,0,32,0);
+      await fh.close();
+
+      const sig=head.toString('ascii');
+      if(!sig.includes('ftyp')){
+        await fs.rm(sourcePath,{force:true}).catch(()=>{});
+        continue;
+      }
+
+      return {url:candidate,size:st.size,contentType};
+    }catch(e){
+      tried.push({url:candidate,error:compactError(e)});
+      await fs.rm(sourcePath,{force:true}).catch(()=>{});
+    }
+  }
+
+  throw new Error(`Video download failed or returned non-MP4 data. Attempts: ${JSON.stringify(tried).slice(0,2500)}`);
+}
+
 function parseBlackFreeze(stderr=''){
   const black=[];
   const freeze=[];
@@ -76,9 +146,7 @@ export function createAuditFramesHandler({outputs}){
     const sourcePath=path.join(dir,'source.mp4');
 
     try{
-      const response=await fetch(videoUrl,{redirect:'follow'});
-      if(!response.ok||!response.body) throw new Error(`Video download failed: HTTP ${response.status}`);
-      await pipeline(Readable.fromWeb(response.body),createWriteStream(sourcePath));
+      const download=await downloadVideoSource(videoUrl,sourcePath);
 
       const probe=await run('ffprobe',[
         '-v','error','-show_entries','format=duration',
@@ -147,6 +215,9 @@ export function createAuditFramesHandler({outputs}){
         project_id:projectId,
         audit_id:auditId,
         source_video_url:videoUrl,
+        resolved_video_url:download.url,
+        source_video_bytes:download.size,
+        source_video_content_type:download.contentType,
         duration_seconds:Number(duration.toFixed(3)),
         sample_count:frames.length,
         frames,
