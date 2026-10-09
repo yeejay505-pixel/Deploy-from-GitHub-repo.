@@ -8,6 +8,7 @@ import {spawn} from 'node:child_process';
 import multer from 'multer';
 import {createAssemblyHandler} from './assembly.mjs';
 import {createPremiumAssemblyHandler} from './premium-assembly.mjs';
+import {createAuditFramesHandler} from './audit-frames.mjs';
 import {createSemanticRoutes} from './semantic-preview.mjs';
 
 const here=path.dirname(fileURLToPath(import.meta.url));
@@ -750,6 +751,8 @@ app.post('/refresh-scenes',async(req,res)=>{
     results
   });
 });
+
+app.post('/audit-frames',createAuditFramesHandler({outputs}));
 
 app.post('/assemble-final',upload.single('voice'),createAssemblyHandler({here,outputs}));
 
