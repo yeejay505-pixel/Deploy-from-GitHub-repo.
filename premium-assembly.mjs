@@ -886,122 +886,131 @@ export function createPremiumAssemblyHandler({
         );
 
       /*
-       * POST-ENCODE TRUE-PEAK SAFETY REPAIR
-       *
-       * AAC can introduce peak overshoot after the
-       * loudness normalization stage.
-       *
-       * If the final encoded MP4 measures above
-       * -0.5 dBFS, lower the audio gain and
-       * re-encode AUDIO ONLY.
-       *
-       * Video is stream-copied, so there is no
-       * second video render.
-       */
-      if(
-        meter.peak!==null &&
-        meter.peak>-0.5
-      ){
-        const repairSource=
-          path.join(
-            workDir,
-            'peak-repair-source.mp4'
-          );
+ * POST-ENCODE TRUE-PEAK SAFETY REPAIR
+ *
+ * AAC encoding can introduce inter-sample overshoot even after
+ * loudness normalization and limiting.
+ *
+ * Strategy:
+ * 1. Measure the actual encoded MP4.
+ * 2. If true peak is above -0.5 dBFS, attenuate toward -2.0 dBFS.
+ * 3. Re-encode AUDIO ONLY while stream-copying video.
+ * 4. Re-measure the actual AAC output.
+ * 5. Repeat up to 3 times if required.
+ *
+ * Video is never re-rendered during repair.
+ */
+if(
+  meter.peak !== null &&
+  meter.peak > -0.5
+){
+  const targetPeak = -2.0;
+  const maxRepairPasses = 3;
 
-        await fs.copyFile(
-          finalPath,
-          repairSource
-        );
+  for(
+    let repairPass = 1;
+    repairPass <= maxRepairPasses;
+    repairPass++
+  ){
+    if(
+      meter.peak === null ||
+      meter.peak <= -0.5
+    ){
+      break;
+    }
 
-        const targetPeak=-1.0;
+    const repairSource = path.join(
+      workDir,
+      `peak-repair-source-${repairPass}.mp4`
+    );
 
-        const gainDb=Math.min(
-          0,
-          targetPeak-meter.peak
-        );
+    await fs.copyFile(
+      finalPath,
+      repairSource
+    );
 
-        await run(
-          'ffmpeg',
-          [
-            '-y',
+    const gainDb = Math.min(
+      0,
+      targetPeak - meter.peak
+    );
 
-            '-i',repairSource,
+    console.log(
+      [
+        `Starting peak repair pass ${repairPass}`,
+        `currentPeak=${meter.peak}`,
+        `targetPeak=${targetPeak}`,
+        `gain=${gainDb.toFixed(2)}dB`
+      ].join(' | ')
+    );
 
-            '-map','0:v:0',
-            '-map','0:a:0',
+    await run(
+      'ffmpeg',
+      [
+        '-y',
+        '-i',repairSource,
+        '-map','0:v:0',
+        '-map','0:a:0',
+        '-c:v','copy',
+        '-af',`volume=${gainDb.toFixed(2)}dB,alimiter=limit=.79`,
+        '-c:a','aac',
+        '-b:a','192k',
+        '-movflags','+faststart',
+        finalPath
+      ]
+    );
 
-            /*
-             * Existing video is already final.
-             * Do not re-render it.
-             */
-            '-c:v','copy',
+    meter = await measureLufs(
+      finalPath
+    );
 
-            /*
-             * Reduce measured overshoot and
-             * add a final sample limiter.
-             */
-            '-af',
-            `volume=${gainDb.toFixed(2)}dB,alimiter=limit=.89`,
+    console.log(
+      [
+        `Peak repair pass ${repairPass} complete`,
+        `measuredPeak=${meter.peak}`,
+        `measuredLufs=${meter.lufs}`
+      ].join(' | ')
+    );
+  }
 
-            '-c:a','aac',
-            '-b:a','192k',
+  if(
+    meter.peak !== null &&
+    meter.peak > -0.5
+  ){
+    console.warn(
+      `True peak remains above delivery limit after repair: ${meter.peak} dBFS`
+    );
+  }
 
-            '-movflags','+faststart',
+  info = await probe(
+    finalPath
+  );
 
-            finalPath
-          ]
-        );
+  video =
+    (info.streams || [])
+      .find(
+        s => s.codec_type === 'video'
+      );
 
-        /*
-         * Measure the actual repaired AAC master,
-         * not the pre-encode signal.
-         */
-        meter=
-          await measureLufs(
-            finalPath
-          );
+  audio =
+    (info.streams || [])
+      .find(
+        s => s.codec_type === 'audio'
+      );
 
-        /*
-         * Re-probe because audio repair creates
-         * a new final MP4.
-         */
-        info=
-          await probe(
-            finalPath
-          );
+  duration = num(
+    info.format?.duration,
+    0
+  );
 
-        video=
-          (info.streams||[])
-            .find(
-              s=>s.codec_type==='video'
-            );
+  size = num(
+    info.format?.size,
+    0
+  );
 
-        audio=
-          (info.streams||[])
-            .find(
-              s=>s.codec_type==='audio'
-            );
-
-        duration=
-          num(
-            info.format?.duration,
-            0
-          );
-
-        size=
-          num(
-            info.format?.size,
-            0
-          );
-
-        durationDelta=
-          Math.abs(
-            duration-targetDuration
-          );
-      }
-
-      const qa=[
-        {
+  durationDelta = Math.abs(
+    duration - targetDuration
+  );
+}        {
           checkName:'scene_count',
           result:
             scenes.length===expectedSceneCount
