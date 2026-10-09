@@ -1008,9 +1008,12 @@ if(
   );
 
   durationDelta = Math.abs(
-    duration - targetDuration
-  );
-}        {
+  duration - targetDuration
+);
+}
+
+const qa=[
+  {
           checkName:'scene_count',
           result:
             scenes.length===expectedSceneCount
