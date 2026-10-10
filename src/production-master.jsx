@@ -98,24 +98,52 @@ const Shell=({children})=><AbsoluteFill style={{
 </AbsoluteFill>;
 
 const Headline=({text,color=C.ink,small=false,align='left',y=145})=>{
+  const safe=cleanText(text);
   const f=useCurrentFrame();
+  if(!safe) return null;
   return <div style={{
     position:'absolute',left:84,right:84,top:y,
     fontSize:small?42:72,fontWeight:900,lineHeight:1.03,letterSpacing:-1.5,
     color,textAlign:align,
     opacity:prog(f,0,10),
     transform:`translateY(${interpolate(f,[0,12],[28,0],clamp)}px)`
-  }}>{text}</div>;
+  }}>{safe}</div>;
 };
 
 const Label=({text,x=90,y=315,color=C.muted})=>{
+  const safe=cleanText(text);
   const f=useCurrentFrame();
+  if(!safe) return null;
   return <div style={{
     position:'absolute',left:x,top:y,
     fontSize:26,fontWeight:800,letterSpacing:1.5,textTransform:'uppercase',
     color,opacity:prog(f,4,14)
-  }}>{text}</div>;
+  }}>{safe}</div>;
 };
+
+
+const safePurpose=(c,fallback='') =>
+  cleanText(c?.purpose) || cleanText(c?.data_binding) || fallback;
+
+const isApartmentMotif=(v) =>
+  /^YOUR\s+APARTMENT$/i.test(String(v??'').trim());
+
+const MotifBadge=({text='YOUR APARTMENT',color=C.blue})=>{
+  const f=useCurrentFrame();
+  return <div style={{
+    position:'absolute',right:72,top:126,
+    maxWidth:320,padding:'16px 22px',
+    borderRadius:999,background:'#FFFFFF',
+    border:`3px solid ${color}`,
+    boxShadow:'0 10px 28px rgba(17,24,39,.08)',
+    fontSize:24,fontWeight:900,letterSpacing:.8,
+    color,opacity:prog(f,0,10),
+    zIndex:20
+  }}>{cleanText(text,'YOUR APARTMENT')}</div>;
+};
+
+const MaybeHeadline=({c,...props}) =>
+  c?.__suppress_title ? null : <Headline {...props}/>;
 
 const Panel=({x,y,w,h,color=C.panel,children,border=C.line,opacity=1})=>
   <div style={{
@@ -134,6 +162,7 @@ const GenericText=({c})=>{
   ].map(v=>cleanText(v)).find(Boolean)||'';
   const col=accent(c.persistent_object_id||c.instance_id);
   if(!explicitMain) return null;
+  if(isApartmentMotif(explicitMain)) return <MotifBadge text={explicitMain} color={col}/>;
   return <>
     <Headline text={explicitMain}/>
     {explicitSub?<Headline text={explicitSub} small y={285} color={col}/>:null}
@@ -144,7 +173,9 @@ const TagLabel=({c})=>{
   const p=parseProps(c.props);
   const text=[p.text,p.label,p.title,p.copy,c.purpose].map(v=>cleanText(v)).find(Boolean)||'';
   if(!text) return null;
-  return <Label text={text} color={accent(c.persistent_object_id||c.instance_id)}/>;
+  const col=accent(c.persistent_object_id||c.instance_id);
+  if(isApartmentMotif(text)) return <MotifBadge text={text} color={col}/>;
+  return <Label text={text} color={col}/>;
 };
 
 const StatCard=({c})=>{
@@ -152,7 +183,7 @@ const StatCard=({c})=>{
   const p=parseProps(c.props);
   const texts=textValues(p);
   const value=texts.find(x=>/[0-9%$AED]/i.test(x))||texts[0]||'—';
-  const label=texts.find(x=>x!==value)||c.purpose||'KEY METRIC';
+  const label=cleanText(texts.find(x=>x!==value))||safePurpose(c,'KEY METRIC');
   const col=accent(c.persistent_object_id||c.instance_id);
   return <>
     <Label text={label} color={col}/>
@@ -180,7 +211,7 @@ const ProgressMeter=({c})=>{
   const shown=interpolate(f,[0,24],[0,pct],clamp);
   const title=cleanText(p.title)||cleanText(p.text)||cleanText(c.purpose,'PROGRESS');
   return <>
-    <Headline text={title} small/>
+    <MaybeHeadline c={c} text={title} small/>
     <div style={{position:'absolute',left:110,right:110,top:700,height:86,borderRadius:50,background:'#E9EDF3',overflow:'hidden'}}>
       <div style={{height:'100%',width:`${shown}%`,background:col,borderRadius:50}}/>
     </div>
@@ -196,9 +227,9 @@ const BarChart=({c})=>{
   const hasValues=Array.isArray(p.values)&&p.values.length>0&&p.values.every(v=>Number.isFinite(Number(v)));
   const values=hasValues?p.values.slice(0,4).map(Number):Array.from({length:Math.max(1,labels.length||3)},()=>1);
   const max=Math.max(1,...values);
-  const title=cleanText(p.title)||cleanText(c.purpose,'COMPARISON');
+  const title=cleanText(p.title)||safePurpose(c,'COMPARISON');
   return <>
-    <Headline text={title} small/>
+    <MaybeHeadline c={c} text={title} small/>
     <div style={{position:'absolute',left:120,right:120,top:500,bottom:340,display:'flex',alignItems:'flex-end',gap:38}}>
       {values.map((v,i)=>{
         const h=(Number(v)||0)/max*700*prog(f,5+i*4,28+i*4);
@@ -222,7 +253,7 @@ const LineChart=({c})=>{
   const visible=Math.max(2,Math.round(interpolate(f,[0,30],[2,pts.length],clamp)));
   const d=pts.slice(0,visible).map((q,i)=>(i?'L':'M')+q[0]+' '+q[1]).join(' ');
   return <>
-    <Headline text={p.title||c.purpose||'TREND'} small/>
+    <MaybeHeadline c={c} text={cleanText(p.title)||safePurpose(c,'TREND')} small/>
     <svg viewBox="0 0 1080 1920" style={{position:'absolute',inset:0}}>
       <line x1="130" y1="1220" x2="950" y2="1220" stroke={C.line} strokeWidth="4"/>
       <line x1="130" y1="470" x2="130" y2="1220" stroke={C.line} strokeWidth="4"/>
@@ -242,9 +273,9 @@ const Donut=({c})=>{
   const pct=hasPct?Math.max(0,Math.min(100,raw)):0;
   const r=210,circ=2*Math.PI*r,shown=pct/100*circ*prog(f,0,25);
   const col=accent(c.instance_id);
-  const title=cleanText(p.title)||cleanText(c.purpose,'SHARE');
+  const title=cleanText(p.title)||safePurpose(c,'SHARE');
   return <>
-    <Headline text={title} small/>
+    <MaybeHeadline c={c} text={title} small/>
     <svg width="1080" height="1200" style={{position:'absolute',top:380}}>
       <circle cx="540" cy="480" r={r} fill="none" stroke="#E7EBF0" strokeWidth="70"/>
       {hasPct?<circle cx="540" cy="480" r={r} fill="none" stroke={col} strokeWidth="70" strokeLinecap="round"
@@ -258,19 +289,23 @@ const Flow=({c,mode='flow'})=>{
   const f=useCurrentFrame();
   const p=parseProps(c.props);
   const texts=textValues(p);
-  const labels=(Array.isArray(p.steps)?p.steps.map(x=>cleanText(x)).filter(Boolean):texts.length?texts:['INPUT','MECHANISM','OUTPUT']).slice(0,5);
+  const labels=(Array.isArray(p.steps)
+    ? p.steps.map(x=>cleanText(x)).filter(Boolean)
+    : texts.map(x=>cleanText(x)).filter(Boolean)
+  );
+  const safeLabels=(labels.length?labels:['INPUT','MECHANISM','OUTPUT']).slice(0,5);
   const col=accent(c.persistent_object_id||c.instance_id);
   return <>
-    <Headline text={p.title||c.purpose||'MECHANISM'} small/>
+    <MaybeHeadline c={c} text={cleanText(p.title)||safePurpose(c,'MECHANISM')} small/>
     <svg viewBox="0 0 1080 1920" style={{position:'absolute',inset:0}}>
-      {labels.slice(0,-1).map((_,i)=>{
+      {safeLabels.slice(0,-1).map((_,i)=>{
         const y=570+i*225;
         const y2=570+(i+1)*225;
         const q=prog(f,8+i*5,24+i*5);
         return <line key={i} x1="540" y1={y+70} x2="540" y2={y2-70} stroke={col} strokeWidth="10" opacity={q}/>;
       })}
     </svg>
-    {labels.map((x,i)=>{
+    {safeLabels.map((x,i)=>{
       const q=prog(f,3+i*5,18+i*5);
       return <div key={i} style={{
         position:'absolute',left:190,top:500+i*225,width:700,height:140,
@@ -287,7 +322,7 @@ const Queue=({c})=>{
   const col=accent(c.instance_id);
   const n=7;
   return <>
-    <Headline text={c.purpose||'QUEUE / THROUGHPUT'} small/>
+    <MaybeHeadline c={c} text={safePurpose(c,'QUEUE / THROUGHPUT')} small/>
     <div style={{position:'absolute',left:90,right:90,top:690,height:420,borderRadius:42,border:`3px solid ${col}`,background:C.panel,overflow:'hidden'}}>
       {Array.from({length:n}).map((_,i)=>{
         const q=prog(f,i*3,15+i*3);
@@ -306,7 +341,7 @@ const Compare=({c})=>{
   const right=t[1]||'AFTER';
   const col=accent(c.instance_id);
   return <>
-    <Headline text={p.title||c.purpose||'COMPARISON'} small/>
+    <MaybeHeadline c={c} text={cleanText(p.title)||safePurpose(c,'COMPARISON')} small/>
     <Panel x={70} y={500} w={450} h={760}>
       <div style={{padding:40,fontSize:38,fontWeight:900,color:C.muted}}>{left}</div>
       <div style={{position:'absolute',left:40,right:40,bottom:60,height:330,borderRadius:28,background:'#E8ECF2',transform:`scaleY(${.55+.45*prog(f,0,25)})`,transformOrigin:'bottom'}}/>
@@ -325,7 +360,7 @@ const Timeline=({c})=>{
   const events=t.length?t:['START','CHANGE','RESULT'];
   const col=accent(c.instance_id);
   return <>
-    <Headline text={p.title||c.purpose||'TIMELINE'} small/>
+    <MaybeHeadline c={c} text={cleanText(p.title)||safePurpose(c,'TIMELINE')} small/>
     <div style={{position:'absolute',left:120,right:120,top:870,height:8,background:C.line}}/>
     {events.map((x,i)=>{
       const q=prog(f,5+i*5,18+i*5);
@@ -344,7 +379,7 @@ const MapLike=({c})=>{
   const p=parseProps(c.props);
   const t=textValues(p);
   return <>
-    <Headline text={p.title||c.purpose||'LOCATION / SYSTEM MAP'} small/>
+    <MaybeHeadline c={c} text={cleanText(p.title)||safePurpose(c,'LOCATION / SYSTEM MAP')} small/>
     <Panel x={80} y={430} w={920} h={980}>
       <svg viewBox="0 0 920 980" width="920" height="980">
         <path d="M70 780 C190 650 270 720 360 560 C460 390 590 430 850 180" fill="none" stroke="#D5DBE5" strokeWidth="30" strokeLinecap="round"/>
@@ -360,7 +395,7 @@ const Blocks=({c})=>{
   const f=useCurrentFrame();
   const col=accent(c.persistent_object_id||c.instance_id);
   return <>
-    <Headline text={c.purpose||'SUPPLY / VOLUME'} small/>
+    <MaybeHeadline c={c} text={safePurpose(c,'SUPPLY / VOLUME')} small/>
     <div style={{position:'absolute',left:120,right:120,top:560,bottom:330,display:'flex',alignItems:'flex-end',gap:22}}>
       {Array.from({length:9}).map((_,i)=>{
         const q=prog(f,3+i*2,18+i*2);
@@ -376,7 +411,7 @@ const ScaleBalance=({c})=>{
   const rot=interpolate(q,[0,1],[-12,0]);
   const col=accent(c.instance_id);
   return <>
-    <Headline text={c.purpose||'TRADE-OFF'} small/>
+    <MaybeHeadline c={c} text={safePurpose(c,'TRADE-OFF')} small/>
     <div style={{position:'absolute',left:170,right:170,top:850,height:18,borderRadius:12,background:C.ink,transform:`rotate(${rot}deg)`,transformOrigin:'center'}}>
       <div style={{position:'absolute',left:20,top:-220,width:220,height:180,borderRadius:30,border:`4px solid ${col}`,background:'#fff'}}/>
       <div style={{position:'absolute',right:20,top:-220,width:220,height:180,borderRadius:30,border:`4px solid ${C.amber}`,background:'#fff'}}/>
@@ -415,7 +450,7 @@ const Presenter=({c})=>{
   const f=useCurrentFrame();
   const col=accent(c.persistent_object_id||c.instance_id);
   return <>
-    <Headline text={c.purpose||'PRESENTER'} small/>
+    <MaybeHeadline c={c} text={safePurpose(c,'PRESENTER')} small/>
     <div style={{position:'absolute',left:330,top:520,width:420,height:720,borderRadius:'210px 210px 80px 80px',background:'#F4F5F7',border:`5px solid ${col}`,opacity:prog(f,0,14)}}>
       <div style={{position:'absolute',left:110,top:80,width:200,height:200,borderRadius:'50%',background:'#D7DCE4'}}/>
       <div style={{position:'absolute',left:70,top:310,width:280,height:330,borderRadius:'120px 120px 50px 50px',background:col,opacity:.9}}/>
@@ -427,7 +462,7 @@ const Custom=({c})=>{
   const f=useCurrentFrame();
   const col=accent(c.instance_id);
   return <>
-    <Headline text={c.purpose||'CUSTOM DIAGRAM'} small/>
+    <MaybeHeadline c={c} text={safePurpose(c,'CUSTOM DIAGRAM')} small/>
     <svg viewBox="0 0 1080 1920" style={{position:'absolute',inset:0}}>
       <rect x="150" y="520" width="780" height="720" rx="70" fill="#F8FAFC" stroke={col} strokeWidth="8" opacity={prog(f,0,12)}/>
       <path d="M250 1030 C390 790 550 1130 820 690" fill="none" stroke={col} strokeWidth="16" strokeLinecap="round" pathLength="1" strokeDasharray="1" strokeDashoffset={1-prog(f,6,28)}/>
@@ -473,14 +508,40 @@ const Layer=({c,pkg,sceneStart})=>{
 };
 
 function prepareComponents(raw,start,end){
-  const list=(Array.isArray(raw)?raw:[]).map(c=>({...c})).sort((a,b)=>{
+  let list=(Array.isArray(raw)?raw:[]).map(c=>({...c})).sort((a,b)=>{
     const sa=num(a.start_sec,start),sb=num(b.start_sec,start);
     if(sa!==sb) return sa-sb;
     return num(a.layer)-num(b.layer);
   });
 
   const headlineIds=new Set(['headline_block','kinetic_phrase','callout_box']);
+
+  // Remove same-beat duplicate headline layers. These were the primary source
+  // of stacked unreadable text in the audited master.
+  const seenHeadlineSlots=new Set();
+  list=list.filter(c=>{
+    const id=String(c.component_id||'').toLowerCase();
+    if(!headlineIds.has(id)) return true;
+    const p=parseProps(c.props);
+    const visible=[
+      p.text,p.headline,p.title,p.copy,p.label,p.value,c.purpose,c.data_binding
+    ].map(v=>cleanText(v)).find(Boolean)||'';
+    if(!visible) return false;
+    const slot=Math.round(num(c.start_sec,start)*10);
+    const key=`${slot}:${visible.toLowerCase()}`;
+    if(seenHeadlineSlots.has(key)) return false;
+    seenHeadlineSlots.add(key);
+    return true;
+  });
+
   const headlines=list.filter(c=>headlineIds.has(String(c.component_id||'').toLowerCase()));
+  const hasDedicatedHeadline=headlines.length>0;
+  if(hasDedicatedHeadline){
+    for(const c of list){
+      const id=String(c.component_id||'').toLowerCase();
+      if(!headlineIds.has(id) && id!=='label_tag') c.__suppress_title=true;
+    }
+  }
 
   for(let i=0;i<headlines.length-1;i++){
     const cur=headlines[i];
