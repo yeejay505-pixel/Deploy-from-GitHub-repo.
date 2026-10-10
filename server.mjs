@@ -8,6 +8,8 @@ import {spawn} from 'node:child_process';
 import multer from 'multer';
 import {createAssemblyHandler} from './assembly.mjs';
 import {createPremiumAssemblyHandler} from './premium-assembly.mjs';
+import {createAuditFramesHandler} from './audit-frames.mjs';
+import {createSemanticRoutes} from './semantic-preview.mjs';
 
 const here=path.dirname(fileURLToPath(import.meta.url));
 const outputs=path.join(here,'outputs');
@@ -76,6 +78,21 @@ function normalizeScene(raw={}){
 }
 
 app.use(express.json({limit:'12mb'}));
+// Opt-in intake API, registered before renderer authentication so it can use
+// its own credential. Existing renderer routes and startup remain unchanged.
+if(process.env.INTAKE_STORE_DIR){
+  const {createIntakeRoutes}=await import('./intake/gateway-routes.mjs');
+  const profile=JSON.parse(await fs.readFile(path.join(here,'quality/approved-visual-reference.json'),'utf8'));
+  const bindings=process.env.INTAKE_BINDINGS_FILE?JSON.parse(await fs.readFile(process.env.INTAKE_BINDINGS_FILE,'utf8')):{};
+  const intake=createIntakeRoutes({app,directory:process.env.INTAKE_STORE_DIR,token:process.env.INTAKE_TOKEN,
+    profile,bindings,allowedChatIds:JSON.parse(process.env.INTAKE_ALLOWED_CHAT_IDS||'["8580375575"]'),
+    durableStorageConfirmed:process.env.INTAKE_DURABLE_STORAGE_CONFIRMED==='1',forbiddenDirectories:[here],
+    reviewedPlans:{enabled:process.env.INTAKE_REVIEWED_PLAN_ENABLED==='1'},
+    reviewRead:{token:process.env.INTAKE_REVIEW_READ_TOKEN||'',eventId:process.env.INTAKE_REVIEW_READ_EVENT_ID||'',expiresAt:Number(process.env.INTAKE_REVIEW_READ_EXPIRES_AT||0)},
+    intelligence:{model:process.env.INTAKE_INTELLIGENCE_MODEL||'',paidCallsEnabled:process.env.INTAKE_INTELLIGENCE_PAID_ENABLED==='1'},
+    render:{workerEventId:process.env.INTAKE_RENDER_WORKER_EVENT_ID||'',pinnedReview:process.env.INTAKE_RENDER_PINNED_REVIEW?JSON.parse(process.env.INTAKE_RENDER_PINNED_REVIEW):null,assetDirectory:process.env.INTAKE_RENDER_ASSET_DIR||'',guideEnabled:process.env.INTAKE_RENDER_GUIDE_ENABLED==='1',workerEnabled:process.env.INTAKE_RENDER_WORKER_ENABLED==='1'}});
+  for(const signal of ['SIGTERM','SIGINT'])process.once(signal,()=>{Promise.resolve(intake.close()).then(()=>process.exit(0));});
+}
 app.use('/outputs',express.static(outputs));
 app.use('/render-assets',express.static(stagedRoot));
 
@@ -83,6 +100,11 @@ app.use((req,res,next)=>{
   if(!TOKEN||req.path==='/health')return next();
   if((req.get('authorization')||'')!==`Bearer ${TOKEN}`) return res.status(401).json({ok:false,error:'Unauthorized'});
   next();
+});
+
+createSemanticRoutes({
+  app,outputs,token:TOKEN,baseUrl:publicBase,
+  enqueue:job=>{const p=queue.then(job,job);queue=p.catch(()=>{});return p;}
 });
 
 app.get('/health',async(req,res)=>{
@@ -221,7 +243,7 @@ async function renderProductionOne(body,req){
   await fs.mkdir(frameDir,{recursive:true});
 
   try{
-    await renderFrames({
+    const renderAttempt=()=>renderFrames({
       composition,
       serveUrl,
       outputDir:frameDir,
@@ -236,7 +258,21 @@ async function renderProductionOne(body,req){
       chromiumOptions:{enableMultiProcessOnLinux:false}
     });
 
-    await new Promise(r=>setTimeout(r,250));
+    await renderAttempt();
+    await new Promise(r=>setTimeout(r,500));
+
+    let frames=(await fs.readdir(frameDir).catch(()=>[])).filter(x=>/^element-\d+\.jpeg$/i.test(x));
+    if(!frames.length){
+      console.warn('No frames after first universal render attempt; retrying scene',sceneManifest.scene_id);
+      await fs.rm(frameDir,{recursive:true,force:true}).catch(()=>{});
+      await fs.mkdir(frameDir,{recursive:true});
+      await renderAttempt();
+      await new Promise(r=>setTimeout(r,750));
+      frames=(await fs.readdir(frameDir).catch(()=>[])).filter(x=>/^element-\d+\.jpeg$/i.test(x));
+    }
+    if(!frames.length){
+      throw new Error(`Universal renderer produced zero JPEG frames for ${sceneManifest.scene_id}`);
+    }
 
     const pattern=path.join(frameDir,'element-%03d.jpeg');
     await new Promise((resolve,reject)=>{
@@ -362,39 +398,135 @@ async function renderUniversalOne(body,req){
   await fs.mkdir(frameDir,{recursive:true});
 
   try{
-    await renderFrames({
-      composition,
-      serveUrl,
-      outputDir:frameDir,
-      inputProps,
-      imageFormat:'jpeg',
-      jpegQuality:scale===1?82:74,
-      scale,
-      concurrency:1,
-      muted:true,
-      logLevel:'warn',
-      browserExecutable:process.env.REMOTION_BROWSER_EXECUTABLE||undefined,
-      chromiumOptions:{enableMultiProcessOnLinux:false}
-    });
+    const expectedFrames=Math.max(1,Number(composition.durationInFrames||0));
+    const shortScene=(expectedFrames/Number(composition.fps||30))<=5;
+    const maxAttempts=shortScene?3:2;
 
-    await new Promise(r=>setTimeout(r,250));
+    const renderAttempt=async(attempt)=>{
+      await fs.rm(frameDir,{recursive:true,force:true}).catch(()=>{});
+      await fs.mkdir(frameDir,{recursive:true});
+
+      await renderFrames({
+        composition,
+        serveUrl,
+        outputDir:frameDir,
+        inputProps,
+        imageFormat:'jpeg',
+        jpegQuality:scale===1?82:74,
+        scale,
+        concurrency:1,
+        muted:true,
+        logLevel:'warn',
+        browserExecutable:process.env.REMOTION_BROWSER_EXECUTABLE||undefined,
+        chromiumOptions:{enableMultiProcessOnLinux:false}
+      });
+
+      await new Promise(r=>setTimeout(r,shortScene?900:600));
+
+      const frames=(await fs.readdir(frameDir).catch(()=>[]))
+        .filter(x=>/^element-\d+\.jpeg$/i.test(x))
+        .sort((a,b)=>{
+          const ai=Number((a.match(/(\d+)/)||[])[1]||0);
+          const bi=Number((b.match(/(\d+)/)||[])[1]||0);
+          return ai-bi;
+        });
+
+      const indexes=frames.map(x=>Number((x.match(/(\d+)/)||[])[1]||-1));
+      const unique=new Set(indexes);
+      const first=indexes.length?Math.min(...indexes):-1;
+      const last=indexes.length?Math.max(...indexes):-1;
+      const contiguous=indexes.length===unique.size &&
+        first===0 &&
+        last===expectedFrames-1 &&
+        indexes.length===expectedFrames;
+
+      console.log('universal frame validation',{
+        sceneId:sceneManifest.scene_id,
+        attempt,
+        shortScene,
+        expectedFrames,
+        actualFrames:frames.length,
+        firstFrame:first,
+        lastFrame:last,
+        contiguous
+      });
+
+      return {frames,indexes,contiguous,first,last};
+    };
+
+    let validation=null;
+    for(let attempt=1;attempt<=maxAttempts;attempt++){
+      validation=await renderAttempt(attempt);
+      if(validation.contiguous) break;
+      if(attempt<maxAttempts){
+        console.warn(
+          'Universal frame validation failed; retrying scene',
+          sceneManifest.scene_id,
+          `attempt ${attempt}/${maxAttempts}`,
+          `expected ${expectedFrames}, got ${validation.frames.length}`
+        );
+        await new Promise(r=>setTimeout(r,shortScene?1000:700));
+      }
+    }
+
+    if(!validation?.contiguous){
+      throw new Error(
+        `Universal renderer frame validation failed for ${sceneManifest.scene_id}: expected ${expectedFrames} contiguous JPEG frames (0-${expectedFrames-1}), got ${validation?.frames?.length||0}; first=${validation?.first??-1}, last=${validation?.last??-1}`
+      );
+    }
 
     const pattern=path.join(frameDir,'element-%03d.jpeg');
-    await new Promise((resolve,reject)=>{
-      const args=[
-        '-y','-framerate',String(composition.fps),'-i',pattern,
-        '-c:v','libx264','-preset','superfast','-crf',scale===1?'18':'21',
-        '-pix_fmt','yuv420p','-movflags','+faststart',outputLocation
-      ];
-      const ff=spawn('ffmpeg',args,{stdio:['ignore','pipe','pipe']});
-      let stderr='';
-      ff.stderr.on('data',d=>{stderr+=d.toString();if(stderr.length>12000)stderr=stderr.slice(-12000);});
-      ff.on('error',reject);
-      ff.on('close',(code,signal)=>{
-        if(code===0)return resolve();
-        reject(new Error(`Universal FFmpeg failed with code ${code}${signal?` (${signal})`:''}: ${stderr.slice(-5000)}`));
+
+    const encodeAttempt=async(attempt)=>{
+      await fs.rm(outputLocation,{force:true}).catch(()=>{});
+      return await new Promise((resolve,reject)=>{
+        const args=[
+          '-y','-framerate',String(composition.fps),'-i',pattern,
+          '-c:v','libx264','-preset','superfast','-crf',scale===1?'18':'21',
+          '-pix_fmt','yuv420p','-movflags','+faststart',outputLocation
+        ];
+        const ff=spawn('ffmpeg',args,{stdio:['ignore','pipe','pipe']});
+        let stderr='';
+        ff.stderr.on('data',d=>{stderr+=d.toString();if(stderr.length>12000)stderr=stderr.slice(-12000);});
+        ff.on('error',reject);
+        ff.on('close',async(code,signal)=>{
+          if(code!==0){
+            return reject(new Error(`Universal FFmpeg failed with code ${code}${signal?` (${signal})`:''}: ${stderr.slice(-5000)}`));
+          }
+          try{
+            const stat=await fs.stat(outputLocation);
+            if(!(stat.size>1024)) return reject(new Error(`Universal FFmpeg produced invalid output for ${sceneManifest.scene_id}: ${stat.size} bytes`));
+            return resolve({size:stat.size,attempt});
+          }catch(e){
+            return reject(new Error(`Universal FFmpeg output missing for ${sceneManifest.scene_id}: ${e?.message||e}`));
+          }
+        });
       });
-    });
+    };
+
+    let encodeResult=null;
+    let encodeError=null;
+    for(let attempt=1;attempt<=3;attempt++){
+      try{
+        encodeResult=await encodeAttempt(attempt);
+        console.log('universal ffmpeg encode success',{
+          sceneId:sceneManifest.scene_id,
+          attempt,
+          outputBytes:encodeResult.size
+        });
+        encodeError=null;
+        break;
+      }catch(e){
+        encodeError=e;
+        console.warn('universal ffmpeg encode attempt failed',{
+          sceneId:sceneManifest.scene_id,
+          attempt,
+          error:compactError(e)
+        });
+        if(attempt<3) await new Promise(r=>setTimeout(r,800*attempt));
+      }
+    }
+    if(encodeError) throw encodeError;
   }finally{
     await fs.rm(frameDir,{recursive:true,force:true}).catch(()=>{});
   }
@@ -619,6 +751,8 @@ app.post('/refresh-scenes',async(req,res)=>{
     results
   });
 });
+
+app.post('/audit-frames',upload.single('video'),createAuditFramesHandler({outputs}));
 
 app.post('/assemble-final',upload.single('voice'),createAssemblyHandler({here,outputs}));
 

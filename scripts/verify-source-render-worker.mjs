@@ -1,0 +1,33 @@
+// Real server subprocess and shutdown/restart proof. Synthetic accepted source plan.
+import fs from 'node:fs/promises';import os from 'node:os';import path from 'node:path';import net from 'node:net';import assert from 'node:assert/strict';import {spawn} from 'node:child_process';
+import {IntakeStore} from '../intake/gateway-store.mjs';import {IntelligenceAdapter} from '../intelligence/adapter-store.mjs';import {extractRetainedSource} from '../intake/source-extractor.mjs';import {fixturePlan} from '../examples/source-intelligence-fixture.mjs';
+const [assetDirectory]=process.argv.slice(2);if(!assetDirectory)throw Error('Usage: verify-source-render-worker.mjs TRUSTED_ASSET_DIRECTORY');
+const root=await fs.mkdtemp(path.join(os.tmpdir(),'source-render-worker-')),profile=JSON.parse(await fs.readFile(new URL('../quality/approved-visual-reference.json',import.meta.url),'utf8')),config={directory:root,profile,allowedChatIds:['8580375575']};
+const id='TG-8580375575-200',credential='fixture-intake-token',headers={Authorization:'Bearer '+credential};
+const freePort=()=>new Promise(resolve=>{const s=net.createServer();s.listen(0,'127.0.0.1',()=>{const port=s.address().port;s.close(()=>resolve(port));});});
+async function start(workerEnabled){
+ const port=await freePort(),env={...process.env,PORT:String(port),RENDER_TOKEN:'fixture-render-token',INTAKE_STORE_DIR:root,INTAKE_TOKEN:credential,INTAKE_DURABLE_STORAGE_CONFIRMED:'1',INTAKE_RENDER_ASSET_DIR:path.resolve(assetDirectory),INTAKE_RENDER_GUIDE_ENABLED:'1',INTAKE_RENDER_WORKER_ENABLED:workerEnabled?'1':'0',INTAKE_INTELLIGENCE_PAID_ENABLED:'0'};delete env.INTAKE_BINDINGS_FILE;
+ const child=spawn(process.execPath,[new URL('../server.mjs',import.meta.url).pathname],{env,stdio:['ignore','pipe','pipe']});let log='';child.stderr.on('data',d=>log=(log+d).slice(-4000));
+ await new Promise((resolve,reject)=>{const timer=setTimeout(()=>{child.kill('SIGKILL');reject(Error('server_start_timeout '+log));},10000);const fail=()=>{clearTimeout(timer);reject(Error('server_start_failed '+log));};child.once('error',fail);child.once('exit',fail);child.stdout.on('data',d=>{if(d.toString().includes('render-worker listening')){clearTimeout(timer);child.removeListener('exit',fail);resolve();}});});
+ return {base:'http://127.0.0.1:'+port,stop:()=>new Promise(resolve=>{if(child.exitCode!==null)return resolve();const timer=setTimeout(()=>child.kill('SIGKILL'),4000);child.once('exit',()=>{clearTimeout(timer);resolve();});child.kill('SIGTERM');})};
+}
+let server;
+try{
+ const store=new IntakeStore(config),intel=new IntelligenceAdapter(store,{model:'fixture-model',paidCallsEnabled:true}),bytes=Buffer.from('Suitable offices serve businesses.\nOffice delivery takes time.\nInspect the completed office.\n');
+ const retained=store.retain({telegramUpdate:{message:{date:1791043200,message_id:200,chat:{id:8580375575},caption:'Explain delivery and usable office space.',document:{file_id:'fixture-200',file_name:'fixture.txt',file_size:bytes.length}}},files:[{bytes}]});const job=await extractRetainedSource(store,retained.job.event_id),p=fixturePlan(job),states=['early build','limited build','completed closed floor','open empty floor'];p.objects[0].role='same office asset and usable floor';p.objects[0].initial_state=states[0];for(const [i,s] of p.sentences.entries()){s.visual_argument.state_before[0].state=states[i];s.visual_argument.state_after[0].state=states[i+1];Object.assign(s.visual_argument.visible_action[0],{operation:i===2?'unfold':'build',from_state:states[i],to_state:states[i+1]});s.visual_argument.sound_cue.type='whoosh';}intel.prepare(id);const permit=intel.authorizeCall(id);assert.equal(intel.recordResult(id,permit.call_token,{status:'completed',output:[{content:[{type:'output_text',text:JSON.stringify(p)}]}]}).status,'validated_draft');store.close();
+ server=await start(false);const endpoint=suffix=>server.base+'/intake/jobs/'+id+suffix;
+ assert.equal((await fetch(endpoint('/render/enqueue'),{method:'POST',headers:{Authorization:'Bearer fixture-render-token'}})).status,401);
+ const queued=await(await fetch(endpoint('/render/enqueue'),{method:'POST',headers})).json();assert.equal(queued.status,'queued');assert.equal((await(await fetch(endpoint('/render'),{headers})).json()).attempts,0);await server.stop();server=null;
+ console.log('PASS actual server honors opt-in queue worker and separate intake authentication.');
+ server=await start(true);let active;
+ for(let i=0;i<50;i++){active=await(await fetch(endpoint('/render'),{headers})).json();if(active.status==='running')break;await new Promise(r=>setTimeout(r,100));}
+ assert.equal(active.status,'running');await server.stop();server=null;
+ const inspect=new IntakeStore(config),row=inspect.db.prepare('SELECT * FROM render_runs WHERE event_id=?').get(id);assert.equal(row.status,'running');assert.equal(row.attempts,1);inspect.db.prepare('UPDATE render_runs SET lease_until=? WHERE event_id=?').run(Date.now()-1,id);inspect.close();
+ console.log('PASS actual server shutdown stops active deterministic work; stored lease remains recoverable.');
+ server=await start(true);let result;const deadline=Date.now()+180000;
+ while(Date.now()<deadline){result=await(await fetch(endpoint('/render'),{headers})).json();if(!['queued','running'].includes(result.status))break;await new Promise(r=>setTimeout(r,1000));}
+ assert.equal(result.status,'completed_review',JSON.stringify(result));assert.equal(result.attempts,2);assert.equal(result.receipt.release_eligible,false);assert.equal(result.report.qc.technical_qc,'pass');assert.equal(result.report.qc.voice_status,'guide');assert.equal(result.report.qc.facts_verified,false);assert.equal((await fetch(endpoint('/render/artifacts/video'))).status,401);assert.equal((await fetch(endpoint('/render/artifacts/video'),{headers})).status,200);assert.equal((await(await fetch(endpoint('/intelligence/call'),{method:'POST',headers})).json()).permitted,false);
+ console.log('PASS restarted actual server renders a measured guide preview with QC, authenticated artifacts and no paid model replay.');
+ const receipt=result.receipt.receipt_id;await server.stop();server=null;server=await start(true);result=await(await fetch(endpoint('/render'),{headers})).json();assert.equal(result.receipt.receipt_id,receipt);assert.equal(result.attempts,2);assert.equal((await fetch(endpoint('/render/artifacts/video'),{headers})).status,200);assert.equal((await(await fetch(endpoint('/render/enqueue'),{method:'POST',headers})).json()).duplicate,true);
+ console.log('PASS completed render receipt and download survive another actual server restart without re-encoding.');
+}finally{await server?.stop();await fs.rm(root,{recursive:true,force:true});}

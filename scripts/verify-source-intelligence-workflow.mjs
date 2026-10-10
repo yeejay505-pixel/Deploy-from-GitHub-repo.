@@ -1,0 +1,15 @@
+import fs from 'node:fs/promises';
+import vm from 'node:vm';
+import assert from 'node:assert/strict';
+const wf=JSON.parse(await fs.readFile(new URL('../workflows/Explainer_Engine_03S_Source_Intelligence_DRAFT.json',import.meta.url),'utf8'));
+const run=(name,input=[],lookup={})=>new vm.Script(`(function(){${wf.nodes.find(n=>n.name===name).parameters.jsCode}})()`).runInNewContext({$input:{all:()=>input,first:()=>input[0]},$items:n=>lookup[n]??[]});
+const example=run('Example Handoff'),configured=run('Configure Adapter',example),dry=run('Return Dry Run',configured);
+assert.equal(configured[0].json.config.enabled,false);assert.equal(dry[0].json.calls_performed,false);assert.equal(dry[0].json.receipt,null);assert.equal(dry[0].json.release_eligible,false);
+assert.throws(()=>run('Check Adapter Configuration',configured));assert.throws(()=>run('Configure Adapter',[...example,...example]));
+configured[0].json.config.base_url='https://fixture.example/';assert.equal(run('Check Adapter Configuration',configured)[0].json.config.base_url,'https://fixture.example');
+const permit={call_token:'fixture-token'};const result=run('Prepare Result Record',[{json:{status:'completed'}}],{'Reserve One Model Call':[{json:permit}]});assert.equal(result[0].json.call_token,'fixture-token');
+const receipt={schema_version:'intake-receipt.v1',receipt_id:'fixture',accepted:true,release_eligible:false};assert.equal(run('Return Stored Receipt Or Review',[{json:{receipt}}])[0].json,receipt);assert.equal(run('Return Stored Receipt Or Review',[{json:{status:'source_research_required'}}])[0].json.receipt,null);
+const names=new Set(wf.nodes.map(n=>n.name));for(const c of Object.values(wf.connections))for(const lane of c.main)for(const e of lane??[])assert.ok(names.has(e.node));assert.equal(wf.active,false);assert.ok(wf.nodes.every(n=>!n.credentials));assert.equal(wf.nodes.filter(n=>/telegram|googleDrive|googleSheets/.test(n.type)).length,0);
+const model=wf.nodes.find(n=>n.name==='OpenAI Draft Source Plan');assert.equal(model.retryOnFail,false);assert.equal(model.onError,'continueRegularOutput');assert.equal(model.parameters.url,'https://api.openai.com/v1/responses');assert.ok(model.parameters.jsonBody.includes('$json.request'));
+assert.equal(wf.nodes.filter(n=>n.type==='n8n-nodes-base.httpRequest'&&n.name!=='OpenAI Draft Source Plan').length,3);
+console.log('PASS: source-intelligence export Code nodes, offline default, stored receipt handling, graph and no-paid-retry configuration. Not a live n8n test.');

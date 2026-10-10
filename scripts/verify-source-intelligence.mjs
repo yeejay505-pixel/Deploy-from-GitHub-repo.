@@ -1,0 +1,85 @@
+import fs from 'node:fs/promises';
+import path from 'node:path';
+import os from 'node:os';
+import assert from 'node:assert/strict';
+import {spawn} from 'node:child_process';
+import express from 'express';
+import {IntakeStore} from '../intake/gateway-store.mjs';
+import {extractRetainedSource} from '../intake/source-extractor.mjs';
+import {createIntakeRoutes} from '../intake/gateway-routes.mjs';
+import {IntelligenceAdapter} from '../intelligence/adapter-store.mjs';
+import {buildIntelligenceRequest,validateIntelligencePlan,parseIntelligenceResponse,INTELLIGENCE_SCHEMA} from '../intelligence/plan-contract.mjs';
+import {prepareDeterministicPlan} from '../intelligence/plan-builder.mjs';
+import {sourceContext} from '../intelligence/plan-contract.mjs';
+import {fixturePlan} from '../examples/source-intelligence-fixture.mjs';
+const dir=await fs.mkdtemp(path.join(os.tmpdir(),'explainer-intelligence-test-'));
+const profile=JSON.parse(await fs.readFile(new URL('../quality/approved-visual-reference.json',import.meta.url),'utf8'));
+const binding={workflow_id:'fixtureAdapter',stage:'intelligence',profile_id:profile.profile_id,benchmark_sha256:profile.reference.sha256,contract:'intake-handoff.v1'};
+const config={directory:dir,profile,allowedChatIds:['8580375575'],bindings:{source_brief_intelligence:binding}};
+const text=Buffer.from('Suitable offices serve occupier demand.\nDelivery can take time.\nThe source estimates 41% growth by 2028.\n');
+const update=id=>({message:{date:1791043200,message_id:id,chat:{id:8580375575},caption:'Explain the central investment mechanism from this source.',document:{file_id:'source-'+id,file_name:'fixture.txt',file_size:text.length}}});
+let store=new IntakeStore(config),adapter=new IntelligenceAdapter(store,{model:'fixture-model'}),count=0;
+const test=async(name,fn)=>{await fn();count++;console.log('PASS '+name);};
+const retain=async id=>{const r=store.retain({telegramUpdate:update(id),files:[{bytes:text}]});return extractRetainedSource(store,r.job.event_id);};
+const event=id=>'TG-8580375575-'+id;
+const response=plan=>({id:'resp-fixture',status:'completed',usage:{input_tokens:100,output_tokens:50,total_tokens:150},output:[{content:[{type:'output_text',text:JSON.stringify(plan)}]}]});
+try{
+ const job=await retain(1),plan=fixturePlan(job);
+ await test('source request is strict, source-bound and has no storage or tool actions',()=>{const r=buildIntelligenceRequest(job,'fixture-model');assert.equal(r.store,false);assert.equal(r.text.format.strict,true);assert.equal(r.truncation,'disabled');assert.equal(r.tools,undefined);assert.ok(r.input[1].content.includes(job.extraction.claims[0].claim_id));const visit=s=>{if(s.type==='object'){assert.equal(s.additionalProperties,false);assert.deepEqual(s.required,Object.keys(s.properties));Object.values(s.properties).forEach(visit);}else if(s.type==='array')visit(s.items);};visit(INTELLIGENCE_SCHEMA);});
+ await test('validated draft carries canonical source locations and remains review-pending',()=>{const p=validateIntelligencePlan(plan,job);assert.equal(p.canonical_claim_ledger.length,3);assert.equal(p.canonical_claim_ledger[0].source_locations[0].unit_kind,'line');assert.equal(p.review.facts_verified,false);assert.equal(p.timing_basis,'draft_unmeasured');assert.equal(p.release_eligible,false);});
+ const mutate=(fn,error)=>{const p=structuredClone(plan);fn(p);assert.throws(()=>validateIntelligencePlan(p,job),error);};
+ await test('builder restores exact cited source quotes without mutating original output',()=>{
+  const raw=structuredClone(plan),removed=raw.claims.shift(),original=JSON.stringify(raw);
+  const built=prepareDeterministicPlan(raw,sourceContext(job));
+  assert.equal(built.plan.claims.find(c=>c.claim_id===removed.claim_id).verbatim_quote,removed.verbatim_quote);assert.equal(JSON.stringify(raw),original);
+  assert.equal(validateIntelligencePlan(built.plan,job).release_eligible,false);
+ });
+ await test('builder moves only sentence-bound citation tokens out of narration',()=>{
+  const raw=structuredClone(plan),id=raw.sentences[0].claim_ids[0];raw.sentences[0].narration+=' ['+id+']';
+  const built=prepareDeterministicPlan(raw,sourceContext(job));assert.equal(built.plan.sentences[0].narration,plan.sentences[0].narration);
+  raw.sentences[0].narration+=' [C-invented]';const bad=prepareDeterministicPlan(raw,sourceContext(job));assert.ok(bad.report.issues.some(i=>i.code==='inline_citation_not_bound'));assert.ok(bad.plan.sentences[0].narration.includes('[C-invented]'));
+ });
+ await test('builder reports empty metrics and label-only scenes without inventing a repair',()=>{
+  const raw=structuredClone(plan);raw.sentences[0].visual_argument.quantity_treatment={mode:'source_bound',metric_ids:[]};raw.objects[0].kind='label';const built=prepareDeterministicPlan(raw,sourceContext(job));
+  assert.ok(built.report.issues.some(i=>i.code==='source_bound_metric_missing'));assert.ok(built.report.issues.some(i=>i.code==='meaningful_diagram_change_required'));assert.equal(built.plan.objects[0].kind,'label');assert.deepEqual(built.plan.metrics,raw.metrics);assert.throws(()=>parseIntelligenceResponse(response(raw),job));
+ });
+ await test('builder restores membership only when explicit before/after state sets agree',()=>{
+  const raw=structuredClone(plan);raw.sentences[0].visual_argument.persistent_objects=[];let built=prepareDeterministicPlan(raw,sourceContext(job));assert.ok(built.report.repairs.some(i=>i.code==='restore_persistent_object_membership'));
+  raw.sentences[0].visual_argument.state_after=[];built=prepareDeterministicPlan(raw,sourceContext(job));assert.ok(built.report.issues.some(i=>i.code==='object_membership_requires_review'));assert.deepEqual(built.plan.sentences[0].visual_argument.state_after,[]);
+ });
+ await test('invented and modified claim IDs or quotes are rejected',()=>{mutate(p=>p.claims[0].verbatim_quote+=' guaranteed',/invented_or_changed_claim/);mutate(p=>p.sentences[0].claim_ids=['invented'],/unknown_claim_reference/);});
+ await test('unsupported narration numbers and changed metric values are rejected',()=>{mutate(p=>p.sentences[0].narration='The office offers a guaranteed 99% return.',/unsupported_narrative_number/);mutate(p=>p.metrics=[{id:'growth',claim_id:plan.claims[2].claim_id,display_text:'41%',values:[99],measure:'demand growth',period:'by 2028',denominator:'source baseline'}],/source_metric_value_changed/);});
+ await test('metric period changes and independent counter values cannot bypass source binding',()=>{mutate(p=>p.metrics=[{id:'growth',claim_id:plan.claims[2].claim_id,display_text:'41%',values:[41],measure:'demand growth',period:'by 2030',denominator:'source baseline'}],/unsupported_narrative_number/);mutate(p=>p.objects[0].metric_ids=['fake-independent-counter'],/object_metric_reference_invalid/);});
+ await test('object continuity and unexplained state changes are rejected',()=>{mutate(p=>p.sentences[1].visual_argument.state_before[0].state='another office',/object_continuity_broken/);mutate(p=>p.sentences[1].visual_argument.visible_action=[],/meaningful_diagram_change_required/);});
+ await test('presenter/caption-only beats and empty visual fields are rejected',()=>{mutate(p=>p.objects[0].kind='presenter',/meaningful_diagram_change_required/);mutate(p=>p.sentences[0].visual_argument.visual_metaphor='',/visual_argument_empty/);});
+ await test('wrong narrative phases, profile downgrade and missing schema fields fail',()=>{mutate(p=>p.sentences[0].phase='mechanism',/narrative_phase_order_invalid/);mutate(p=>p.profile_id='old-renderer',/plan_identity_or_profile_mismatch/);mutate(p=>delete p.sentences[0].visual_argument.sound_cue,/missing_sound_cue/);});
+ await test('SFX target visible actions and quantities use shared metric references',()=>{mutate(p=>p.sentences[0].visual_argument.sound_cue.object_id='unknown',/sound_must_target_visible_action/);mutate(p=>p.sentences[0].visual_argument.quantity_treatment={mode:'source_bound',metric_ids:['invented']},/quantity_metric_reference_invalid/);});
+ await test('refused, incomplete and invalid structured model responses cannot become plans',()=>{assert.throws(()=>parseIntelligenceResponse({status:'incomplete'},job),/response_incomplete/);assert.throws(()=>parseIntelligenceResponse({status:'completed',output:[{content:[{type:'refusal'}]}]},job),/response_refused/);assert.throws(()=>parseIntelligenceResponse({status:'completed',output:[{content:[{type:'output_text',text:'not-json'}]}]},job));});
+ await test('bare topics require research and no model is guessed',()=>{const topic=store.retain({telegramUpdate:{message:{date:1791043200,message_id:2,chat:{id:8580375575},text:'Why do companies need offices?'}}}).job;assert.throws(()=>buildIntelligenceRequest(topic,'fixture-model'),/source_research_required/);assert.throws(()=>buildIntelligenceRequest(job,''),/model_configuration_required/);});
+ await test('durable prepare is idempotent and paid calls remain disabled',()=>{assert.equal(adapter.prepare(event(1)).ready,true);assert.equal(adapter.prepare(event(1)).duplicate,true);assert.equal(adapter.authorizeCall(event(1)).permitted,false);});
+ await test('one model-call reservation survives restart and prevents a paid replay',()=>{adapter.paidCallsEnabled=true;const permit=adapter.authorizeCall(event(1));assert.equal(permit.permitted,true);store.close();store=new IntakeStore(config);adapter=new IntelligenceAdapter(store,{model:'fixture-model',paidCallsEnabled:true});assert.equal(adapter.authorizeCall(event(1)).reason,'reconciliation_required');const result=adapter.recordResult(event(1),permit.call_token,response(plan));assert.equal(result.status,'validated_draft');assert.equal(result.receipt.accepted,true);assert.equal(result.usage.total_tokens,150);assert.ok(result.preparation);assert.equal(store.db.prepare('SELECT count(*) AS n FROM intelligence_output_audit WHERE event_id=?').get(event(1)).n,1);assert.equal(adapter.authorizeCall(event(1)).reason,'cached_draft');assert.equal(adapter.recordResult(event(1),permit.call_token,{status:'completed'}).receipt.receipt_id,result.receipt.receipt_id);});
+ await test('downstream draft receipt completes the existing gateway handoff',async()=>{const j=await retain(3);const claim=store.claim(event(3));assert.equal(claim.claimed,true);adapter.prepare(event(3));const permit=adapter.authorizeCall(event(3));const result=adapter.recordResult(event(3),permit.call_token,response(fixturePlan(j)));assert.equal(store.complete(event(3),claim.lease_token,result.receipt).status,'handed_off');assert.equal(store.get(event(3)).release_eligible,false);});
+ await test('bad responses and ambiguous calls stay blocked for review',async()=>{await retain(4);adapter.prepare(event(4));const p=adapter.authorizeCall(event(4));assert.throws(()=>adapter.recordResult(event(4),'wrong',{}),/call_token_mismatch/);assert.equal(adapter.recordResult(event(4),p.call_token,{error:'fixture-timeout'}).status,'call_uncertain');assert.equal(adapter.authorizeCall(event(4)).permitted,false);});
+ await test('explicit retry archives a completed failure, rejects stale review and cannot replay',async()=>{
+  const j=await retain(40);adapter.prepare(event(40));const first=adapter.authorizeCall(event(40));
+  const failure=adapter.recordResult(event(40),first.call_token,{id:'resp-invalid-plan',status:'completed',usage:{total_tokens:17},output:[]});
+  assert.equal(failure.status,'review_required');
+  const approval={expected_review_hash:failure.review_hash,reason:'Correct missing visual metric bindings',acknowledge_paid_call:true};
+  assert.throws(()=>adapter.retry(event(40),{}),/explicit_retry_review_required/);
+  assert.throws(()=>adapter.retry(event(40),{...approval,expected_review_hash:'stale'}),/retry_review_conflict/);
+  assert.throws(()=>adapter.retry(event(4),approval),/completed_review_failure_required/);
+  const prepared=adapter.retry(event(40),approval);assert.equal(prepared.ready,true);assert.equal(prepared.retry_used,true);
+  const archived=JSON.parse(store.db.prepare('SELECT prior_run FROM intelligence_retry_history WHERE event_id=?').get(event(40)).prior_run);
+  assert.equal(archived.response_id,'resp-invalid-plan');assert.equal(JSON.parse(archived.usage).total_tokens,17);assert.equal(archived.call_token,first.call_token);
+  adapter.paidCallsEnabled=false;assert.equal(adapter.authorizeCall(event(40)).permitted,false);adapter.paidCallsEnabled=true;
+  const second=adapter.authorizeCall(event(40));assert.equal(second.permitted,true);assert.notEqual(second.call_token,first.call_token);
+  assert.throws(()=>adapter.recordResult(event(40),first.call_token,response(fixturePlan(j))),/call_token_mismatch/);
+  assert.equal(adapter.authorizeCall(event(40)).permitted,false);
+  adapter.recordResult(event(40),second.call_token,{id:'resp-second-invalid',status:'completed',output:[]});
+  assert.throws(()=>adapter.retry(event(40),{...approval,expected_review_hash:adapter.get(event(40)).review_hash}),/retry_budget_exhausted/);
+ });
+ await test('parallel processes reserve one downstream model call only',async()=>{await retain(5);adapter.prepare(event(5));const storeURL=new URL('../intake/gateway-store.mjs',import.meta.url).href,adapterURL=new URL('../intelligence/adapter-store.mjs',import.meta.url).href;const code=`import {IntakeStore} from ${JSON.stringify(storeURL)};import {IntelligenceAdapter} from ${JSON.stringify(adapterURL)};const s=new IntakeStore(${JSON.stringify(config)});const a=new IntelligenceAdapter(s,{model:'fixture-model',paidCallsEnabled:true});const r=a.authorizeCall(${JSON.stringify(event(5))});s.close();console.log(JSON.stringify({permitted:r.permitted}));`;const run=()=>new Promise((resolve,reject)=>{const c=spawn(process.execPath,['--input-type=module','-e',code]);let out='',err='';c.stdout.on('data',d=>out+=d);c.stderr.on('data',d=>err+=d);c.on('error',reject);c.on('close',n=>n?reject(Error(err)):resolve(JSON.parse(out)));});const r=await Promise.all(Array.from({length:6},run));assert.equal(r.filter(x=>x.permitted).length,1);});
+ if(process.argv[2])await test('real PPTX source range enters request without invented citations',async()=>{const bytes=await fs.readFile(process.argv[2]),u=update(6);u.message.document.file_name=path.basename(process.argv[2]);u.message.document.file_size=bytes.length;u.message.caption='Use slides 4-14. Explain the mechanism, no project pitch.';store.retain({telegramUpdate:u,files:[{bytes}]});const j=await extractRetainedSource(store,event(6)),r=buildIntelligenceRequest(j,'fixture-model');const context=JSON.parse(r.input[1].content);assert.equal(context.selection.from,4);assert.equal(context.selection.to,14);assert.ok(context.claims.every(c=>c.source_locations.every(s=>s.unit_number>=4&&s.unit_number<=14)));assert.ok(context.claims.every(c=>c.status==='source_assertion_unverified'));});
+ await test('authenticated adapter API loads retained data and accepts fixture receipts only via its reserved call token',async()=>{const app=express(),api=createIntakeRoutes({app,directory:path.join(dir,'api'),token:'fixture-intake',profile,allowedChatIds:['8580375575'],durableStorageConfirmed:true,intelligence:{model:'fixture-model',paidCallsEnabled:true}});const listener=await new Promise(resolve=>{const s=app.listen(0,'127.0.0.1',()=>resolve(s));}),base='http://127.0.0.1:'+listener.address().port+'/intake/jobs/'+event(30)+'/intelligence';try{api.store.retain({telegramUpdate:update(30),files:[{bytes:text}]});const j=await extractRetainedSource(api.store,event(30));const post=(stage,body={})=>fetch(base+'/'+stage,{method:'POST',headers:{Authorization:'Bearer fixture-intake','Content-Type':'application/json'},body:JSON.stringify(body)});assert.equal((await (await post('prepare',{fake_claims:'ignore me'})).json()).ready,true);const p=await(await post('call')).json();assert.equal(p.permitted,true);assert.equal((await post('result',{call_token:'bad',response:response(fixturePlan(j))})).status,409);const r=await(await post('result',{call_token:p.call_token,response:response(fixturePlan(j))})).json();assert.equal(r.status,'validated_draft');assert.equal(r.receipt.release_eligible,false);}finally{await new Promise(resolve=>listener.close(resolve));api.close();}});
+ console.log(`PASS: ${count} source-intelligence checks. Synthetic model fixtures, not a live model call or creative approval.`);
+}finally{store.close();await fs.rm(dir,{recursive:true,force:true});}

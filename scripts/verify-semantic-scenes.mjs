@@ -1,0 +1,33 @@
+import fs from 'node:fs/promises';
+import assert from 'node:assert/strict';
+import {compileSceneSpec,validateSceneSpec,sampleScene} from '../src/semantic/scene-contract.mjs';
+import {drawSemanticScene} from '../src/semantic/scene-renderer.mjs';
+const spec=JSON.parse(await fs.readFile(new URL('../examples/platform-dependency.json',import.meta.url),'utf8'));
+assert.equal(validateSceneSpec(spec).ok,true);
+const compiled=compileSceneSpec(spec);
+assert.equal(sampleScene(compiled,6.8).metrics.get('demand').value,12);
+assert.equal(sampleScene(compiled,10.7).objects.get('flow').progress,0);
+assert.equal(sampleScene(compiled,19.99).metrics.get('demand').value,3);
+assert.equal(sampleScene(compiled,19.99).objects.get('demand-cart').metric,sampleScene(compiled,19.99).objects.get('demand-bar').metric);
+const reject=mutate=>{const s=structuredClone(spec);mutate(s);assert.equal(validateSceneSpec(s).ok,false);};
+reject(s=>s.objects[0].type='unsupported-animation');
+reject(s=>s.actions[0].target='missing-object');
+reject(s=>s.actions.push({...s.actions[0],id:'conflicting-growth',start:2}));
+reject(s=>s.actions.find(a=>a.id==='lose-demand').from=8);
+reject(s=>s.beats[2].start+=.2);
+reject(s=>s.claims[0].status='unsupported');
+reject(s=>s.objects[0].x=2000);
+reject(s=>s.objects[0].h=2);
+reject(s=>s.objects[0].opacity=NaN);
+reject(s=>s.actions[0].to=999);
+reject(s=>s.objects[0].injectedCode='alert(1)');
+// A changed scene remains executable without edits to the renderer itself.
+const second=structuredClone(spec);second.sceneId='newsletter-dependency-test';second.objects[0].label='NEWSLETTER';second.objects[1].label='ONLINE STORE';
+second.metrics[0].max=20;second.metrics[0].initial=4;second.actions[0].from=4;second.actions[0].to=20;
+second.actions.find(a=>a.id==='lose-demand').from=20;second.actions.find(a=>a.id==='lose-demand').to=5;
+const other=compileSceneSpec(second);assert.equal(sampleScene(other,19.99).metrics.get('demand').value,5);
+// Draw every frame through a fake context to catch missing renderer cases without a browser.
+const ctx=new Proxy({measureText:s=>({width:String(s).length*15})},{get:(o,k)=>k in o?o[k]:(...args)=>{}});
+for(let f=0;f<600;f++)drawSemanticScene(ctx,compiled,f/30);
+for(let f=0;f<600;f++)drawSemanticScene(ctx,other,f/30);
+console.log('PASS: two configurable scenes, shared metric, continuity, rejection of unsupported behaviours and all 1,200 draw frames.');
