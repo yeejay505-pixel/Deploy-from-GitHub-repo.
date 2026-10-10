@@ -163,6 +163,7 @@ const GenericText=({c})=>{
   const col=accent(c.persistent_object_id||c.instance_id);
   if(!explicitMain) return null;
   if(isApartmentMotif(explicitMain)) return <MotifBadge text={explicitMain} color={col}/>;
+  if(c?.__suppress_title) return null;
   return <>
     <Headline text={explicitMain}/>
     {explicitSub?<Headline text={explicitSub} small y={285} color={col}/>:null}
@@ -182,12 +183,18 @@ const StatCard=({c})=>{
   const f=useCurrentFrame();
   const p=parseProps(c.props);
   const texts=textValues(p);
-  const value=texts.find(x=>/[0-9%$AED]/i.test(x))||texts[0]||'—';
-  const label=cleanText(texts.find(x=>x!==value))||safePurpose(c,'KEY METRIC');
+  const motif=texts.find(isApartmentMotif);
+  const metricTexts=texts.filter(x=>!isApartmentMotif(x));
+  const value=metricTexts.find(x=>/[0-9%$AED]/i.test(x))||metricTexts[0]||'';
+  const label=cleanText(metricTexts.find(x=>x!==value))||safePurpose(c,'KEY METRIC');
   const col=accent(c.persistent_object_id||c.instance_id);
+
+  if(motif && !value) return <MotifBadge text={motif} color={col}/>;
+
   return <>
-    <Label text={label} color={col}/>
-    <Panel x={110} y={520} w={860} h={500} border={col}>
+    {motif?<MotifBadge text={motif} color={col}/>:null}
+    {label?<Label text={label} color={col}/>:null}
+    {value?<Panel x={110} y={520} w={860} h={500} border={col}>
       <div style={{
         position:'absolute',inset:0,display:'grid',placeItems:'center',
         transform:`scale(${interpolate(f,[0,20],[.86,1],clamp)})`,
@@ -195,7 +202,7 @@ const StatCard=({c})=>{
       }}>
         <div style={{fontSize:128,fontWeight:950,color:col,textAlign:'center'}}>{value}</div>
       </div>
-    </Panel>
+    </Panel>:null}
   </>;
 };
 
@@ -516,8 +523,9 @@ function prepareComponents(raw,start,end){
 
   const headlineIds=new Set(['headline_block','kinetic_phrase','callout_box']);
 
-  // Remove same-beat duplicate headline layers. These were the primary source
-  // of stacked unreadable text in the audited master.
+  // Permit only one dedicated headline to begin in the same time slot.
+  // Different text strings starting together still collide visually, so the
+  // slot itself is the uniqueness key.
   const seenHeadlineSlots=new Set();
   list=list.filter(c=>{
     const id=String(c.component_id||'').toLowerCase();
@@ -527,20 +535,20 @@ function prepareComponents(raw,start,end){
       p.text,p.headline,p.title,p.copy,p.label,p.value,c.purpose,c.data_binding
     ].map(v=>cleanText(v)).find(Boolean)||'';
     if(!visible) return false;
-    const slot=Math.round(num(c.start_sec,start)*10);
-    const key=`${slot}:${visible.toLowerCase()}`;
-    if(seenHeadlineSlots.has(key)) return false;
-    seenHeadlineSlots.add(key);
+    const slot=Math.round(num(c.start_sec,start)*4); // 250ms collision bucket
+    if(seenHeadlineSlots.has(slot)) return false;
+    seenHeadlineSlots.add(slot);
     return true;
   });
 
   const headlines=list.filter(c=>headlineIds.has(String(c.component_id||'').toLowerCase()));
-  const hasDedicatedHeadline=headlines.length>0;
-  if(hasDedicatedHeadline){
-    for(const c of list){
-      const id=String(c.component_id||'').toLowerCase();
-      if(!headlineIds.has(id) && id!=='label_tag') c.__suppress_title=true;
-    }
+
+  // Reserve the upper-left title lane exclusively for dedicated headline
+  // components. Charts, process diagrams, maps and fallback components must
+  // not independently paint competing titles into the same coordinates.
+  for(const c of list){
+    const id=String(c.component_id||'').toLowerCase();
+    if(!headlineIds.has(id) && id!=='label_tag') c.__suppress_title=true;
   }
 
   for(let i=0;i<headlines.length-1;i++){
