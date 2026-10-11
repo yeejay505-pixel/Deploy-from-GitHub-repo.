@@ -6,6 +6,7 @@ import fs from 'node:fs';
 import fsp from 'node:fs/promises';
 import path from 'node:path';
 import {extractSource} from './source-extractor.mjs';
+import {deriveVisualPreviews} from './source-visual-previews.mjs';
 
 const MAX_PACK_SOURCE_BYTES=256*1024*1024;
 const sha256=b=>createHash('sha256').update(b).digest('hex');
@@ -179,6 +180,15 @@ export function createSourcePackRoutes({app,directory,token,allowedChatIds=[],pu
         try{
           extraction=await extractSource(bytes,media.file_name||req.file.originalname||(`source${ext}`));
         }catch(e){extraction={schema_version:'source-extract.v1',status:'failed',units:[],claims:[],warnings:[String(e?.message||e)]};}
+        const previewResult=await deriveVisualPreviews({
+          sourcePath:out,
+          fileName:media.file_name||req.file.originalname||(`source${ext}`),
+          projectId:pack.project_id,
+          assetId,
+          publicAssetDirectory,
+          publicBase:baseFor(req)
+        });
+        extraction={...(extraction||{}),visual_previews:previewResult.previews??[],preview_warning:previewResult.warning??''};
         db.prepare('INSERT OR IGNORE INTO pack_assets(asset_id,project_id,telegram_message_id,asset_type,file_name,mime_type,size_bytes,sha256,public_name,extraction,created_at) VALUES(?,?,?,?,?,?,?,?,?,?,?)')
           .run(assetId,pack.project_id,m.message_id,assetType||'document',media.file_name||req.file.originalname||publicName,media.mime_type||req.file.mimetype||'application/octet-stream',bytes.length,digest,publicName,JSON.stringify(extraction),now);
       }else if(assetType){
