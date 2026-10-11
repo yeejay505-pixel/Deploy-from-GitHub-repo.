@@ -438,18 +438,40 @@ const Ring=({c})=>{
 };
 
 const MediaFrame=({c,pkg,video=false})=>{
+  const f=useCurrentFrame();
   const p=parseProps(c.props);
   const candidate=p.src||p.url||p.media_url||p.image_url||p.video_url||'';
   let src=String(candidate||'');
   if(!src){
     const a=(pkg.assetTasks||[]).find(x=>String(x.asset_id||'')===String(p.asset_id||''));
-    src=String(a?.staged_url||a?.stagedUrl||'');
+    src=String(a?.source_url||a?.staged_url||a?.stagedUrl||'');
   }
   if(!src) return <GenericText c={c}/>;
-  return <Panel x={90} y={420} w={900} h={1060}>
-    {video
-      ? <OffthreadVideo src={src} muted style={{width:'100%',height:'100%',objectFit:'cover'}}/>
-      : <Img src={src} style={{width:'100%',height:'100%',objectFit:'cover'}}/>}
+
+  const fit=['contain','cover'].includes(String(p.fit_mode||''))?String(p.fit_mode):'cover';
+  const anchorMap={center:'50% 50%',top:'50% 20%',bottom:'50% 80%',left:'20% 50%',right:'80% 50%'};
+  const objectPosition=anchorMap[String(p.crop_anchor||'center')]||'50% 50%';
+  const treatment=String(p.treatment||c.motion_spec||'static').toLowerCase();
+  const q=prog(f,0,45);
+  let scale=1,tx=0,ty=0;
+  if(treatment==='slow_push_in') scale=1+.055*q;
+  if(treatment==='slow_push_out') scale=1.055-.055*q;
+  if(treatment==='pan_left'){scale=1.04;tx=interpolate(q,[0,1],[26,-26]);}
+  if(treatment==='pan_right'){scale=1.04;tx=interpolate(q,[0,1],[-26,26]);}
+  if(treatment==='detail_reveal'){scale=1.08-.04*q;}
+  if(treatment==='contain_reveal') scale=.96+.04*q;
+  const mediaStyle={
+    width:'100%',height:'100%',objectFit:fit,objectPosition,
+    transform:`translate(${tx}px,${ty}px) scale(${scale})`,
+    transformOrigin:objectPosition
+  };
+  const panelBg=fit==='contain'?'#FFFFFF':'#F6F8FB';
+  return <Panel x={70} y={390} w={940} h={1120} border="transparent">
+    <div style={{position:'absolute',inset:0,overflow:'hidden',borderRadius:26,background:panelBg}}>
+      {video
+        ? <OffthreadVideo src={src} muted style={mediaStyle}/>
+        : <Img src={src} style={mediaStyle}/>}
+    </div>
   </Panel>;
 };
 
@@ -496,8 +518,8 @@ function ComponentView({c,pkg}){
   if(id==='scale_balance') return <ScaleBalance c={c}/>;
   if(id==='highlight_ring') return <Ring c={c}/>;
   if(id==='presenter_frame') return <Presenter c={c}/>;
-  if(id==='image_frame') return <MediaFrame c={c} pkg={pkg}/>;
-  if(id==='video_frame') return <MediaFrame c={c} pkg={pkg} video/>;
+  if(id==='image_frame'||id==='source_image'||id==='source_slide'||id==='source_plan'||id==='source_map') return <MediaFrame c={c} pkg={pkg}/>;
+  if(id==='video_frame'||id==='source_video') return <MediaFrame c={c} pkg={pkg} video/>;
   if(id==='custom_svg_required') return <Custom c={c}/>;
   return <GenericText c={c}/>;
 }
