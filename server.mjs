@@ -84,6 +84,9 @@ if(process.env.INTAKE_STORE_DIR){
   const {createIntakeRoutes}=await import('./intake/gateway-routes.mjs');
   const profile=JSON.parse(await fs.readFile(path.join(here,'quality/approved-visual-reference.json'),'utf8'));
   const bindings=process.env.INTAKE_BINDINGS_FILE?JSON.parse(await fs.readFile(process.env.INTAKE_BINDINGS_FILE,'utf8')):{};
+  const {createSourcePackRoutes}=await import('./intake/source-pack-routes.mjs');
+  const sourcePack=createSourcePackRoutes({app,directory:process.env.INTAKE_STORE_DIR,token:process.env.INTAKE_TOKEN,
+    allowedChatIds:JSON.parse(process.env.INTAKE_ALLOWED_CHAT_IDS||'["8580375575"]'),publicAssetDirectory:stagedRoot});
   const intake=createIntakeRoutes({app,directory:process.env.INTAKE_STORE_DIR,token:process.env.INTAKE_TOKEN,
     profile,bindings,allowedChatIds:JSON.parse(process.env.INTAKE_ALLOWED_CHAT_IDS||'["8580375575"]'),
     durableStorageConfirmed:process.env.INTAKE_DURABLE_STORAGE_CONFIRMED==='1',forbiddenDirectories:[here],
@@ -91,7 +94,7 @@ if(process.env.INTAKE_STORE_DIR){
     reviewRead:{token:process.env.INTAKE_REVIEW_READ_TOKEN||'',eventId:process.env.INTAKE_REVIEW_READ_EVENT_ID||'',expiresAt:Number(process.env.INTAKE_REVIEW_READ_EXPIRES_AT||0)},
     intelligence:{model:process.env.INTAKE_INTELLIGENCE_MODEL||'',paidCallsEnabled:process.env.INTAKE_INTELLIGENCE_PAID_ENABLED==='1'},
     render:{workerEventId:process.env.INTAKE_RENDER_WORKER_EVENT_ID||'',pinnedReview:process.env.INTAKE_RENDER_PINNED_REVIEW?JSON.parse(process.env.INTAKE_RENDER_PINNED_REVIEW):null,assetDirectory:process.env.INTAKE_RENDER_ASSET_DIR||'',guideEnabled:process.env.INTAKE_RENDER_GUIDE_ENABLED==='1',workerEnabled:process.env.INTAKE_RENDER_WORKER_ENABLED==='1'}});
-  for(const signal of ['SIGTERM','SIGINT'])process.once(signal,()=>{Promise.resolve(intake.close()).then(()=>process.exit(0));});
+  for(const signal of ['SIGTERM','SIGINT'])process.once(signal,()=>{Promise.all([Promise.resolve(intake.close()),Promise.resolve(sourcePack.close())]).then(()=>process.exit(0));});
 }
 app.use('/outputs',express.static(outputs));
 app.use('/render-assets',express.static(stagedRoot));
