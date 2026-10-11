@@ -6,8 +6,8 @@ from xml.etree import ElementTree as ET
 parser=argparse.ArgumentParser()
 parser.add_argument('--name',required=True)
 args=parser.parse_args()
-data=__import__('sys').stdin.buffer.read(32*1024*1024+1)
-if len(data)>32*1024*1024: raise ValueError('source_too_large')
+data=__import__('sys').stdin.buffer.read(256*1024*1024+1)
+if len(data)>256*1024*1024: raise ValueError('source_too_large')
 digest=hashlib.sha256(data).hexdigest()
 source_id='SRC-'+digest[:20]
 units=[]
