@@ -69,6 +69,23 @@ export function createSourcePackRoutes({app,directory,token,allowedChatIds=[],pu
   const packResponse=(pack,extra={})=>({ok:true,project_id:pack?.project_id??null,status:pack?.status??'none',counts:pack?counts(pack.project_id):{messages:0,assets:0,total:0,by_type:{}},...extra});
   const baseFor=req=>`${(req.get('x-forwarded-proto')||req.protocol||'https').split(',')[0].trim()}://${req.get('host')}`;
 
+  router.get('/project/:projectId',(req,res,next)=>{
+    try{
+      const projectId=String(req.params.projectId??'').trim();
+      if(!projectId)throw Object.assign(new Error('project_id_required'),{status:400});
+      const pack=db.prepare('SELECT * FROM packs WHERE project_id=? LIMIT 1').get(projectId);
+      if(!pack)throw Object.assign(new Error('source_pack_not_found'),{status:404});
+      const eventRows=db.prepare('SELECT telegram_message_id,event_type,text_value,created_at FROM pack_events WHERE project_id=? ORDER BY id').all(projectId);
+      const assetRows=db.prepare('SELECT asset_id,telegram_message_id,asset_type,file_name,mime_type,size_bytes,sha256,public_name,extraction,created_at FROM pack_assets WHERE project_id=? ORDER BY created_at,asset_id').all(projectId);
+      const assets=assetRows.map(a=>{
+        let extraction=null;try{extraction=a.extraction?JSON.parse(a.extraction):null;}catch{}
+        return {...a,url:`${baseFor(req)}/render-assets/${encodeURIComponent(a.public_name)}`,extraction};
+      });
+      let metadata={};try{metadata=pack.metadata?JSON.parse(pack.metadata):{};}catch{}
+      return res.json({ok:true,schema_version:'source-pack-project.v1',project_id:projectId,chat_id:pack.chat_id,status:pack.status,brief_text:pack.brief_text,events:eventRows,assets,source_count:eventRows.length+assets.length,metadata});
+    }catch(e){next(e);}
+  });
+
   router.post('/events',upload.single('source'),async(req,res,next)=>{
     try{
       let body=req.body;
@@ -128,7 +145,7 @@ export function createSourcePackRoutes({app,directory,token,allowedChatIds=[],pu
           return {asset_id:a.asset_id,asset_type:a.asset_type,file_name:a.file_name,mime_type:a.mime_type,size_bytes:a.size_bytes,sha256:a.sha256,url:`${baseFor(req)}/render-assets/${encodeURIComponent(a.public_name)}`,extraction_status:ex?.status??'analysis_required'};
         });
         const assetCatalog=assets.length
-          ? `SUPPLIED VISUAL/MEDIA ASSETS\n${assets.map(a=>`- [${a.asset_type}] ${a.file_name} | ${a.url}`).join('\n')}\n\nUse supplied images/videos in the visual plan when relevant. Preserve the exact asset URL for downstream scene/component binding.`
+          ? `SUPPLIED VISUAL/MEDIA ASSETS\n${assets.map(a=>`- [${a.asset_type}] ${a.file_name} | ${a.url}`).join('\n')}\n\nSOURCE-ASSET BINDING IS MANDATORY. When a supplied project image, render, slide, plan, map, or video is relevant to a narration beat, it MUST be used instead of a generic replacement. Every storyboard scene must declare source_asset_strategy and asset_bindings with exact supplied URLs. Generic motion graphics are allowed only when they explain a quantity, comparison, process, location, or relationship that cannot be shown directly by the supplied project material. Avoid decorative or repetitive graphics. Reserve text-safe zones and do not cover important architecture, faces, logos, maps, or labels. For source-heavy real-estate videos, target at least 60% of scenes using supplied project assets when enough relevant assets exist.`
           : '';
         const fullBrief=[...briefParts,extracts.length?`\nSUPPLIED SOURCE EXTRACTS\n${extracts.join('\n\n')}`:'',assetCatalog]
           .filter(Boolean)
