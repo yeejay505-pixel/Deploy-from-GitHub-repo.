@@ -153,7 +153,7 @@ export function createSourcePackRoutes({app,directory,token,allowedChatIds=[],pu
         if(!media?.file_id)throw Object.assign(new Error('media_metadata_missing'),{status:400});
         const bytes=req.file.buffer;
         const digest=sha256(bytes);
-        const assetId='ASSET-'+digest.slice(0,20);
+        const assetId='ASSET-'+sha256(Buffer.from(pack.project_id+'\n'+digest)).slice(0,20);
         const ext=path.extname(media.file_name||req.file.originalname||'')||({image:'.jpg',video:'.mp4',audio:'.mp3',voice:'.ogg',animation:'.mp4'}[assetType]||'.bin');
         const publicName=`${safe(pack.project_id)}_${assetId}${safe(ext)}`;
         const out=path.join(publicAssetDirectory,publicName);
