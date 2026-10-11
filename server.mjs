@@ -562,13 +562,35 @@ async function renderUniversalOne(body,req){
       );
     }
 
-    const pattern=path.join(frameDir,'element-%03d.jpeg');
+    const encodeDir=path.join(frameDir,'ffmpeg-sequence');
+    await fs.rm(encodeDir,{recursive:true,force:true}).catch(()=>{});
+    await fs.mkdir(encodeDir,{recursive:true});
+
+    // Remotion's JPEG filename padding can vary by frame count. Normalize the
+    // validated sequence to a fixed 6-digit FFmpeg pattern before encoding.
+    for(let i=0;i<validation.frames.length;i++){
+      const source=path.join(frameDir,validation.frames[i]);
+      const target=path.join(encodeDir,`frame-${String(i).padStart(6,'0')}.jpeg`);
+      await fs.copyFile(source,target);
+    }
+
+    const normalizedFrames=(await fs.readdir(encodeDir).catch(()=>[]))
+      .filter(x=>/^frame-\d{6}\.jpeg$/i.test(x))
+      .sort();
+
+    if(normalizedFrames.length!==expectedFrames){
+      throw new Error(
+        `Universal FFmpeg sequence normalization failed for ${sceneManifest.scene_id}: expected ${expectedFrames}, got ${normalizedFrames.length}`
+      );
+    }
+
+    const pattern=path.join(encodeDir,'frame-%06d.jpeg');
 
     const encodeAttempt=async(attempt)=>{
       await fs.rm(outputLocation,{force:true}).catch(()=>{});
       return await new Promise((resolve,reject)=>{
         const args=[
-          '-y','-framerate',String(composition.fps),'-i',pattern,
+          '-y','-framerate',String(composition.fps),'-start_number','0','-i',pattern,
           '-c:v','libx264','-preset','superfast','-crf',scale===1?'18':'21',
           '-pix_fmt','yuv420p','-movflags','+faststart',outputLocation
         ];
