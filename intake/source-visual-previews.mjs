@@ -22,10 +22,10 @@ export async function deriveVisualPreviews({sourcePath,fileName,projectId,assetI
   try{
     if(ext==='.pdf'){
       const stem=path.join(publicAssetDirectory,prefix);
-      await run('pdftoppm',['-jpeg','-f','1','-l','12','-scale-to','720','-jpegopt','quality=82',sourcePath,stem]);
+      await run('pdftoppm',['-jpeg','-f','1','-l','60','-scale-to','720','-jpegopt','quality=82',sourcePath,stem]);
       const files=(await fs.readdir(publicAssetDirectory))
         .filter(n=>n.startsWith(prefix+'-')&&n.endsWith('.jpg'))
-        .sort().slice(0,12);
+        .sort().slice(0,60);
       for(let i=0;i<files.length;i++) previews.push({kind:'pdf_page',index:i+1,file_name:files[i],url:`${publicBase}/render-assets/${encodeURIComponent(files[i])}`});
     }else if(['.jpg','.jpeg','.png','.webp'].includes(ext)){
       previews.push({kind:'image',index:1,file_name:path.basename(sourcePath),url:`${publicBase}/render-assets/${encodeURIComponent(path.basename(sourcePath))}`});
