@@ -84,6 +84,7 @@ if(process.env.INTAKE_STORE_DIR){
   const {createIntakeRoutes}=await import('./intake/gateway-routes.mjs');
   const profile=JSON.parse(await fs.readFile(path.join(here,'quality/approved-visual-reference.json'),'utf8'));
   const bindings=process.env.INTAKE_BINDINGS_FILE?JSON.parse(await fs.readFile(process.env.INTAKE_BINDINGS_FILE,'utf8')):{};
+  if(process.env.INTAKE_RESEARCH_WORKFLOW_ID && bindings.research_story){ bindings.research_story.workflow_id=process.env.INTAKE_RESEARCH_WORKFLOW_ID; }
   const {createSourcePackRoutes}=await import('./intake/source-pack-routes.mjs');
   const sourcePack=createSourcePackRoutes({app,directory:process.env.INTAKE_STORE_DIR,token:process.env.INTAKE_TOKEN,
     allowedChatIds:JSON.parse(process.env.INTAKE_ALLOWED_CHAT_IDS||'["8580375575"]'),publicAssetDirectory:stagedRoot});
