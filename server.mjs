@@ -3,7 +3,7 @@ import path from 'node:path';
 import fs from 'node:fs/promises';
 import {fileURLToPath} from 'node:url';
 import {bundle} from '@remotion/bundler';
-import {renderFrames,selectComposition} from '@remotion/renderer';
+import {renderFrames,renderStill,selectComposition} from '@remotion/renderer';
 import {spawn} from 'node:child_process';
 import multer from 'multer';
 import {createAssemblyHandler} from './assembly.mjs';
@@ -399,8 +399,31 @@ async function renderUniversalOne(body,req){
 
   try{
     const expectedFrames=Math.max(1,Number(composition.durationInFrames||0));
-    const shortScene=(expectedFrames/Number(composition.fps||30))<=5;
-    const maxAttempts=shortScene?3:2;
+    const durationSeconds=expectedFrames/Number(composition.fps||30);
+    const shortScene=durationSeconds<=5;
+    const stillFallbackEligible=durationSeconds<=3;
+    const maxAttempts=shortScene?4:2;
+
+    const inspectFrames=async()=>{
+      const frames=(await fs.readdir(frameDir).catch(()=>[]))
+        .filter(x=>/^element-\d+\.jpeg$/i.test(x))
+        .sort((a,b)=>{
+          const ai=Number((a.match(/(\d+)/)||[])[1]||0);
+          const bi=Number((b.match(/(\d+)/)||[])[1]||0);
+          return ai-bi;
+        });
+
+      const indexes=frames.map(x=>Number((x.match(/(\d+)/)||[])[1]||-1));
+      const unique=new Set(indexes);
+      const first=indexes.length?Math.min(...indexes):-1;
+      const last=indexes.length?Math.max(...indexes):-1;
+      const contiguous=indexes.length===unique.size &&
+        first===0 &&
+        last===expectedFrames-1 &&
+        indexes.length===expectedFrames;
+
+      return {frames,indexes,contiguous,first,last};
+    };
 
     const renderAttempt=async(attempt)=>{
       await fs.rm(frameDir,{recursive:true,force:true}).catch(()=>{});
@@ -421,57 +444,121 @@ async function renderUniversalOne(body,req){
         chromiumOptions:{enableMultiProcessOnLinux:false}
       });
 
-      await new Promise(r=>setTimeout(r,shortScene?900:600));
+      await new Promise(r=>setTimeout(r,shortScene?1200:600));
 
-      const frames=(await fs.readdir(frameDir).catch(()=>[]))
-        .filter(x=>/^element-\d+\.jpeg$/i.test(x))
-        .sort((a,b)=>{
-          const ai=Number((a.match(/(\d+)/)||[])[1]||0);
-          const bi=Number((b.match(/(\d+)/)||[])[1]||0);
-          return ai-bi;
-        });
-
-      const indexes=frames.map(x=>Number((x.match(/(\d+)/)||[])[1]||-1));
-      const unique=new Set(indexes);
-      const first=indexes.length?Math.min(...indexes):-1;
-      const last=indexes.length?Math.max(...indexes):-1;
-      const contiguous=indexes.length===unique.size &&
-        first===0 &&
-        last===expectedFrames-1 &&
-        indexes.length===expectedFrames;
+      const validation=await inspectFrames();
 
       console.log('universal frame validation',{
         sceneId:sceneManifest.scene_id,
         attempt,
         shortScene,
         expectedFrames,
-        actualFrames:frames.length,
-        firstFrame:first,
-        lastFrame:last,
-        contiguous
+        actualFrames:validation.frames.length,
+        firstFrame:validation.first,
+        lastFrame:validation.last,
+        contiguous:validation.contiguous
       });
 
-      return {frames,indexes,contiguous,first,last};
+      return validation;
+    };
+
+    const renderStillFallback=async()=>{
+      console.warn('Universal short-scene renderFrames exhausted; switching to renderStill frame-by-frame fallback',{
+        sceneId:sceneManifest.scene_id,
+        durationSeconds,
+        expectedFrames
+      });
+
+      await fs.rm(frameDir,{recursive:true,force:true}).catch(()=>{});
+      await fs.mkdir(frameDir,{recursive:true});
+
+      for(let frame=0;frame<expectedFrames;frame++){
+        const out=path.join(frameDir,`element-${String(frame).padStart(3,'0')}.jpeg`);
+        await renderStill({
+          composition,
+          serveUrl,
+          output:out,
+          inputProps,
+          frame,
+          imageFormat:'jpeg',
+          jpegQuality:scale===1?82:74,
+          scale,
+          logLevel:'warn',
+          browserExecutable:process.env.REMOTION_BROWSER_EXECUTABLE||undefined,
+          chromiumOptions:{enableMultiProcessOnLinux:false}
+        });
+
+        if((frame+1)%10===0 || frame===expectedFrames-1){
+          console.log('universal renderStill fallback progress',{
+            sceneId:sceneManifest.scene_id,
+            renderedFrames:frame+1,
+            expectedFrames
+          });
+        }
+      }
+
+      const validation=await inspectFrames();
+      console.log('universal renderStill fallback validation',{
+        sceneId:sceneManifest.scene_id,
+        expectedFrames,
+        actualFrames:validation.frames.length,
+        firstFrame:validation.first,
+        lastFrame:validation.last,
+        contiguous:validation.contiguous
+      });
+      return validation;
     };
 
     let validation=null;
+    let lastFrameError=null;
+
     for(let attempt=1;attempt<=maxAttempts;attempt++){
-      validation=await renderAttempt(attempt);
-      if(validation.contiguous) break;
+      try{
+        validation=await renderAttempt(attempt);
+        lastFrameError=null;
+      }catch(e){
+        lastFrameError=e;
+        validation=await inspectFrames();
+        console.warn('Universal renderFrames attempt threw',{
+          sceneId:sceneManifest.scene_id,
+          attempt,
+          error:compactError(e),
+          actualFrames:validation.frames.length
+        });
+      }
+
+      if(validation?.contiguous) break;
+
       if(attempt<maxAttempts){
         console.warn(
           'Universal frame validation failed; retrying scene',
           sceneManifest.scene_id,
           `attempt ${attempt}/${maxAttempts}`,
-          `expected ${expectedFrames}, got ${validation.frames.length}`
+          `expected ${expectedFrames}, got ${validation?.frames?.length||0}`
         );
-        await new Promise(r=>setTimeout(r,shortScene?1000:700));
+        await new Promise(r=>setTimeout(r,shortScene?1400:700));
+      }
+    }
+
+    if(!validation?.contiguous && stillFallbackEligible){
+      try{
+        validation=await renderStillFallback();
+        lastFrameError=null;
+      }catch(e){
+        lastFrameError=e;
+        validation=await inspectFrames();
+        console.error('Universal renderStill fallback failed',{
+          sceneId:sceneManifest.scene_id,
+          error:compactError(e),
+          actualFrames:validation.frames.length
+        });
       }
     }
 
     if(!validation?.contiguous){
+      const detail=lastFrameError?`; lastError=${compactError(lastFrameError)}`:'';
       throw new Error(
-        `Universal renderer frame validation failed for ${sceneManifest.scene_id}: expected ${expectedFrames} contiguous JPEG frames (0-${expectedFrames-1}), got ${validation?.frames?.length||0}; first=${validation?.first??-1}, last=${validation?.last??-1}`
+        `Universal renderer frame validation failed for ${sceneManifest.scene_id}: expected ${expectedFrames} contiguous JPEG frames (0-${expectedFrames-1}), got ${validation?.frames?.length||0}; first=${validation?.first??-1}, last=${validation?.last??-1}${detail}`
       );
     }
 
