@@ -117,8 +117,8 @@ app.get('/health',async(req,res)=>{
   res.json({
     ok:true,
     service:'explainer-render-worker',
-    version:'0.15.0',
-    renderProfile:'universal-media-aware-1080x1920+preview+final-assembly',
+    version:'0.16.0',
+    renderProfile:'universal-source-bound-media-aware-1080x1920+preview+final-assembly',
     strategy:'staged-media+renderFrames-system-ffmpeg+sequential-scene-rendering',
     memoryMax,
     heapMb:Math.round(process.memoryUsage().heapUsed/1024/1024)
