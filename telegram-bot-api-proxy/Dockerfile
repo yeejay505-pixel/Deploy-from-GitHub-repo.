@@ -1,7 +1,8 @@
 FROM aiogram/telegram-bot-api:latest
 
 USER root
-RUN apk add --no-cache nginx
+RUN apk add --no-cache nginx \
+    && sed -i 's/^user .*/user telegram-bot-api;/' /etc/nginx/nginx.conf
 
 COPY nginx.conf /etc/nginx/http.d/default.conf
 COPY start.sh /usr/local/bin/start-telegram-proxy
