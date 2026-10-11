@@ -127,7 +127,13 @@ export function createSourcePackRoutes({app,directory,token,allowedChatIds=[],pu
           }
           return {asset_id:a.asset_id,asset_type:a.asset_type,file_name:a.file_name,mime_type:a.mime_type,size_bytes:a.size_bytes,sha256:a.sha256,url:`${baseFor(req)}/render-assets/${encodeURIComponent(a.public_name)}`,extraction_status:ex?.status??'analysis_required'};
         });
-        const assetCatalog=assets.length?`SUPPLIED VISUAL/MEDIA ASSETS\n${assets.map(a=>`- [${a.asset_type}] ${a.file_name} | ${a.url}`).join('\n')}\n\nUse supplied images/videos in the visual plan when relevant. Preserve the exact asset URL for downstream scene/component binding.`:'';\n        const fullBrief=[...briefParts,extracts.length?`\nSUPPLIED SOURCE EXTRACTS\n${extracts.join('\n\n')}`:'',assetCatalog].filter(Boolean).join('\n\n').trim();
+        const assetCatalog=assets.length
+          ? `SUPPLIED VISUAL/MEDIA ASSETS\n${assets.map(a=>`- [${a.asset_type}] ${a.file_name} | ${a.url}`).join('\n')}\n\nUse supplied images/videos in the visual plan when relevant. Preserve the exact asset URL for downstream scene/component binding.`
+          : '';
+        const fullBrief=[...briefParts,extracts.length?`\nSUPPLIED SOURCE EXTRACTS\n${extracts.join('\n\n')}`:'',assetCatalog]
+          .filter(Boolean)
+          .join('\n\n')
+          .trim();
         const links=[...fullBrief.matchAll(/https?:\/\/[^\s<>()]+/g)].map(x=>x[0]).slice(0,50);
         const sourcePack={schema_version:'source-pack.v1',project_id:pack.project_id,source_count:eventRows.length+assetRows.length,brief_messages:briefParts,assets,links,locked_at:new Date(now).toISOString()};
         db.prepare("UPDATE packs SET status='locked',updated_at=?,build_message_id=?,brief_text=?,metadata=? WHERE project_id=?")
