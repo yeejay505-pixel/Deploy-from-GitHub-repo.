@@ -115,6 +115,23 @@ export function createSourcePackRoutes({app,directory,token,allowedChatIds=[],pu
         return res.status(201).json(packResponse(pack,{action:'collect',reply_text:`📥 SOURCE PACK OPEN\n\nProject: ${projectId}\nSend your brief, PDFs, presentations, images, videos and links.\n\nWhen finished, send /build.`}));
       }
 
+      if(cmd?.name==='retry'){
+        if(req.file)throw Object.assign(new Error('retry_command_must_not_include_attachment'),{status:400});
+        const requested=String(cmd.arg||'').trim();
+        const retryPack=requested
+          ? db.prepare("SELECT * FROM packs WHERE project_id=? AND chat_id=? AND status='locked' LIMIT 1").get(requested,chatId)
+          : db.prepare("SELECT * FROM packs WHERE chat_id=? AND status='locked' ORDER BY updated_at DESC LIMIT 1").get(chatId);
+        if(!retryPack)throw Object.assign(new Error(requested?'retry_project_not_found_or_not_locked':'no_locked_project_available_for_retry'),{status:404});
+        let sourcePack={};try{sourcePack=retryPack.metadata?JSON.parse(retryPack.metadata):{};}catch{}
+        if(!sourcePack?.project_id) sourcePack={schema_version:'source-pack.v1',project_id:retryPack.project_id,source_count:counts(retryPack.project_id).total,brief_messages:[],assets:[],links:[],locked_at:new Date(retryPack.updated_at).toISOString()};
+        const synthetic=structuredClone(update);
+        synthetic.message={...m,text:String(retryPack.brief_text||'').trim()};
+        delete synthetic.message.caption;
+        synthetic._source_pack=sourcePack;
+        synthetic._source_pack_project_id=retryPack.project_id;
+        return res.json(packResponse(retryPack,{action:'build',synthetic_update:synthetic,source_pack:sourcePack,retry:true,reply_text:`🔁 RETRY STARTED\n\nProject: ${retryPack.project_id}\nRestarting production from research with the saved source pack.`}));
+      }
+
       const pack=activePack(chatId);
       if(!pack){
         return res.json({ok:true,action:'passthrough',status:'no_active_source_pack',telegram_update:update});
