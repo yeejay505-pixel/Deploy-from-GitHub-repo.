@@ -323,7 +323,7 @@ async function renderProductionOne(body,req){
     durationSeconds:composition.durationInFrames/composition.fps,
     strategy:scale===1?'production-native-1080x1920-remotion-2.5d-full-film':'production-preview-remotion-2.5d-full-film',
     renderProfile:normalizedProfile,
-    rendererVersion:'0.15.0'
+    rendererVersion:'0.16.0'
   };
 }
 
@@ -658,7 +658,7 @@ async function renderUniversalOne(body,req){
     durationSeconds:composition.durationInFrames/composition.fps,
     strategy:scale===1?'universal-native-1080x1920-media-aware':'universal-preview-540x960-media-aware',
     renderProfile:normalizedProfile,
-    rendererVersion:'0.15.0'
+    rendererVersion:'0.16.0'
   };
 }
 
@@ -693,6 +693,63 @@ app.post('/cleanup-staged-media',async(req,res)=>{
   if(!projectId||!build) return res.status(400).json({ok:false,error:'Missing project/build'});
   await fs.rm(path.join(stagedRoot,projectId,build),{recursive:true,force:true}).catch(()=>{});
   res.json({ok:true,projectId,productionBuildVersion:build});
+});
+
+app.post('/validate-source-bindings',async(req,res)=>{
+  try{
+    const body=req.body||{};
+    const bindings=Array.isArray(body.bindings)?body.bindings:[];
+    const unique=[...new Map(bindings.map(b=>[String(b.url||''),b])).values()]
+      .filter(b=>/^https?:\/\//i.test(String(b.url||'')));
+
+    const checked=[];
+    const failed=[];
+
+    for(const b of unique){
+      const url=String(b.url||'');
+      let ok=false,status=0,error='';
+      try{
+        let response=await fetch(url,{method:'HEAD',redirect:'follow',signal:AbortSignal.timeout(12000)});
+        status=response.status;
+        ok=response.ok;
+        if(!ok || status===405){
+          response=await fetch(url,{
+            method:'GET',
+            headers:{Range:'bytes=0-2047'},
+            redirect:'follow',
+            signal:AbortSignal.timeout(15000)
+          });
+          status=response.status;
+          ok=response.ok || status===206;
+          try{await response.body?.cancel();}catch{}
+        }
+      }catch(e){
+        error=compactError(e);
+      }
+      const row={
+        scene_id:String(b.scene_id||''),
+        preview_id:String(b.preview_id||''),
+        asset_id:String(b.asset_id||''),
+        url,
+        ok,
+        status,
+        error
+      };
+      checked.push(row);
+      if(!ok) failed.push(row);
+    }
+
+    res.status(failed.length?422:200).json({
+      ok:failed.length===0,
+      projectId:String(body.projectId||''),
+      checked_count:checked.length,
+      failed_count:failed.length,
+      checked,
+      failed
+    });
+  }catch(e){
+    res.status(500).json({ok:false,error:compactError(e)});
+  }
 });
 
 app.post('/render-universal-scene',(req,res)=>{
@@ -732,7 +789,7 @@ app.post('/render-universal-batch',async(req,res)=>{
     rendered:results.length-failed,
     failed,
     results,
-    rendererVersion:'0.15.0',
+    rendererVersion:'0.16.0',
     strategy:'universal-sequential-media-aware'
   });
 });
@@ -803,7 +860,7 @@ app.post('/render-production-batch',async(req,res)=>{
     rendered:results.length-failed,
     failed,
     results,
-    rendererVersion:'0.15.0'
+    rendererVersion:'0.16.0'
   });
 });
 
