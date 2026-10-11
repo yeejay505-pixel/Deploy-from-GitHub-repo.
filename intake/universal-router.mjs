@@ -23,7 +23,8 @@ export function routeIntake(item, config, profile) {
   // Stable across retries; chat scoping prevents equal message IDs from colliding.
   const eventId = `TG-${chatId}-${m.message_id}`;
   const intakeId = `INT-${date.slice(0,10).replace(/-/g,'')}-${chatId}-${m.message_id}`;
-  const projectId = `VID-${date.slice(0,10).replace(/-/g,'')}-${chatId}-${m.message_id}`;
+  const sourcePack = update._source_pack ?? null;
+  const projectId = String(update._source_pack_project_id ?? sourcePack?.project_id ?? `VID-${date.slice(0,10).replace(/-/g,'')}-${chatId}-${m.message_id}`);
   const commandMatch = raw.match(/^\/([a-z_]+)(?:@\w+)?(?:\s+(.*))?$/i);
   const command = commandMatch?.[1].toLowerCase() ?? null, arg = commandMatch?.[2]?.trim() ?? '';
   const routes = {
@@ -77,6 +78,7 @@ export function routeIntake(item, config, profile) {
     style:'approved_visual_reference',mascot:/\b(no mascot|no presenter|without a?\s*presenter)\b/i.test(raw)?false:true,
     requested_visuals_json:JSON.stringify({quality_profile_id:profile.profile_id,benchmark_sha256:profile.reference.sha256,deterministic_graphics:true,persistent_objects:true,sentence_visual_contract:profile.required_sentence_fields}),
     quality_profile:profile,
+    source_pack:sourcePack,
     source_asset:media?{file_id:media.file_id,file_unique_id:media.file_unique_id??null,file_name:media.file_name??null,mime_type:media.mime_type??null,file_size:media.file_size??null,binary_property:Object.keys(binary)[0]??null,purpose:raw?'supplied_source_requires_extraction':'reference_requires_analysis'}:null,
     // The raw Telegram envelope keeps existing command parsers compatible.
     telegram_update:update,
