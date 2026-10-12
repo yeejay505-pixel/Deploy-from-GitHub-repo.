@@ -16,10 +16,16 @@ const outputs=path.join(here,'outputs');
 const uploads=path.join(here,'uploads');
 const frameRoot=path.join(here,'frame-cache');
 const stagedRoot=path.join(here,'staged-media');
+// Source-pack originals and derived previews must survive Railway deployments.
+// INTAKE_STORE_DIR is mounted on the persistent Railway volume.
+const sourceAssetRoot=process.env.INTAKE_STORE_DIR
+  ? path.join(process.env.INTAKE_STORE_DIR,'source-assets')
+  : stagedRoot;
 await fs.mkdir(outputs,{recursive:true});
 await fs.mkdir(uploads,{recursive:true});
 await fs.mkdir(frameRoot,{recursive:true});
 await fs.mkdir(stagedRoot,{recursive:true});
+await fs.mkdir(sourceAssetRoot,{recursive:true});
 
 const app=express();
 app.set('trust proxy',1);
@@ -87,7 +93,7 @@ if(process.env.INTAKE_STORE_DIR){
   if(process.env.INTAKE_RESEARCH_WORKFLOW_ID && bindings.research_story){ bindings.research_story.workflow_id=process.env.INTAKE_RESEARCH_WORKFLOW_ID; }
   const {createSourcePackRoutes}=await import('./intake/source-pack-routes.mjs');
   const sourcePack=createSourcePackRoutes({app,directory:process.env.INTAKE_STORE_DIR,token:process.env.INTAKE_TOKEN,
-    allowedChatIds:JSON.parse(process.env.INTAKE_ALLOWED_CHAT_IDS||'["8580375575"]'),publicAssetDirectory:stagedRoot});
+    allowedChatIds:JSON.parse(process.env.INTAKE_ALLOWED_CHAT_IDS||'["8580375575"]'),publicAssetDirectory:sourceAssetRoot});
   const intake=createIntakeRoutes({app,directory:process.env.INTAKE_STORE_DIR,token:process.env.INTAKE_TOKEN,
     profile,bindings,allowedChatIds:JSON.parse(process.env.INTAKE_ALLOWED_CHAT_IDS||'["8580375575"]'),
     durableStorageConfirmed:process.env.INTAKE_DURABLE_STORAGE_CONFIRMED==='1',forbiddenDirectories:[here],
@@ -98,7 +104,9 @@ if(process.env.INTAKE_STORE_DIR){
   for(const signal of ['SIGTERM','SIGINT'])process.once(signal,()=>{Promise.all([Promise.resolve(intake.close()),Promise.resolve(sourcePack.close())]).then(()=>process.exit(0));});
 }
 app.use('/outputs',express.static(outputs));
-app.use('/render-assets',express.static(stagedRoot));
+// Durable source-pack assets first; ephemeral staged render media remains available too.
+app.use('/render-assets',express.static(sourceAssetRoot));
+if(sourceAssetRoot!==stagedRoot) app.use('/render-assets',express.static(stagedRoot));
 
 app.use((req,res,next)=>{
   if(!TOKEN||req.path==='/health')return next();
