@@ -138,7 +138,10 @@ export function createSourcePackRoutes({app,directory,token,allowedChatIds=[],pu
       // update atomically before any reply, source mutation, or downstream dispatch.
       // A redelivery becomes a silent no-op instead of starting production twice.
       const updateId=Number.isSafeInteger(update?.update_id)?String(update.update_id):'';
-      receiptKey=updateId?`update:${updateId}`:`message:${chatId}:${m.message_id}`;
+      // Deduplicate on Telegram chat_id + message_id, not update_id.
+      // Local Bot API / webhook redelivery can assign different update_ids
+      // to the same underlying Telegram message.
+      receiptKey=`message:${chatId}:${m.message_id}`;
       const claim=db.prepare(
         'INSERT OR IGNORE INTO source_pack_update_receipts(receipt_key,chat_id,telegram_message_id,update_id,created_at) VALUES(?,?,?,?,?)'
       ).run(receiptKey,chatId,m.message_id,updateId,now);
