@@ -69,6 +69,8 @@ export function createSourcePackRoutes({app,directory,token,allowedChatIds=[],pu
   };
   const packResponse=(pack,extra={})=>({ok:true,project_id:pack?.project_id??null,status:pack?.status??'none',counts:pack?counts(pack.project_id):{messages:0,assets:0,total:0,by_type:{}},...extra});
   const baseFor=req=>`${(req.get('x-forwarded-proto')||req.protocol||'https').split(',')[0].trim()}://${req.get('host')}`;
+  const publicUrl=(req,fileName)=>`${baseFor(req)}/render-assets/${encodeURIComponent(String(fileName??''))}`;
+  const fileExists=fileName=>Boolean(fileName)&&fs.existsSync(path.join(publicAssetDirectory,String(fileName)));
 
   router.get('/project/:projectId',(req,res,next)=>{
     try{
@@ -78,12 +80,26 @@ export function createSourcePackRoutes({app,directory,token,allowedChatIds=[],pu
       if(!pack)throw Object.assign(new Error('source_pack_not_found'),{status:404});
       const eventRows=db.prepare('SELECT telegram_message_id,event_type,text_value,created_at FROM pack_events WHERE project_id=? ORDER BY id').all(projectId);
       const assetRows=db.prepare('SELECT asset_id,telegram_message_id,asset_type,file_name,mime_type,size_bytes,sha256,public_name,extraction,created_at FROM pack_assets WHERE project_id=? ORDER BY created_at,asset_id').all(projectId);
+      let missingVisualPreviewCount=0;
       const assets=assetRows.map(a=>{
         let extraction=null;try{extraction=a.extraction?JSON.parse(a.extraction):null;}catch{}
-        return {...a,url:`${baseFor(req)}/render-assets/${encodeURIComponent(a.public_name)}`,extraction};
+        if(extraction&&Array.isArray(extraction.visual_previews)){
+          const available=[];
+          for(const p of extraction.visual_previews){
+            const fileName=String(p?.file_name??'');
+            if(fileExists(fileName)){
+              available.push({...p,url:publicUrl(req,fileName)});
+            }else{
+              missingVisualPreviewCount++;
+            }
+          }
+          extraction={...extraction,visual_previews:available};
+        }
+        const available=fileExists(a.public_name);
+        return {...a,url:available?publicUrl(req,a.public_name):'',available,extraction};
       });
       let metadata={};try{metadata=pack.metadata?JSON.parse(pack.metadata):{};}catch{}
-      return res.json({ok:true,schema_version:'source-pack-project.v1',project_id:projectId,chat_id:pack.chat_id,status:pack.status,brief_text:pack.brief_text,events:eventRows,assets,source_count:eventRows.length+assets.length,metadata});
+      return res.json({ok:true,schema_version:'source-pack-project.v2',project_id:projectId,chat_id:pack.chat_id,status:pack.status,brief_text:pack.brief_text,events:eventRows,assets,source_count:eventRows.length+assets.length,missing_visual_preview_count:missingVisualPreviewCount,metadata});
     }catch(e){next(e);}
   });
 
@@ -115,6 +131,37 @@ export function createSourcePackRoutes({app,directory,token,allowedChatIds=[],pu
         return res.status(201).json(packResponse(pack,{action:'collect',reply_text:`📥 SOURCE PACK OPEN\n\nProject: ${projectId}\nSend your brief, PDFs, presentations, images, videos and links.\n\nWhen finished, send /build.`}));
       }
 
+      if(cmd?.name==='reopen'){
+        if(req.file)throw Object.assign(new Error('reopen_command_must_not_include_attachment'),{status:400});
+        const requested=String(cmd.arg||'').trim();
+        if(!requested)throw Object.assign(new Error('reopen_project_id_required'),{status:400});
+        const existing=db.prepare("SELECT * FROM packs WHERE project_id=? AND chat_id=? LIMIT 1").get(requested,chatId);
+        if(!existing)throw Object.assign(new Error('reopen_project_not_found'),{status:404});
+
+        const otherActive=activePack(chatId);
+        if(otherActive&&String(otherActive.project_id)!==String(existing.project_id)){
+          return res.status(409).json(packResponse(otherActive,{ok:false,action:'stop',error:'another_source_pack_is_collecting',reply_text:`⚠️ SOURCE PACK REOPEN BLOCKED\n\nAnother project is currently collecting: ${otherActive.project_id}\nCancel or build that pack first.`}));
+        }
+
+        if(existing.status!=='collecting'){
+          const staleRows=db.prepare('SELECT public_name,extraction FROM pack_assets WHERE project_id=?').all(existing.project_id);
+          for(const row of staleRows){
+            const names=[String(row.public_name??'')];
+            let ex=null;try{ex=row.extraction?JSON.parse(row.extraction):null;}catch{}
+            for(const p of(Array.isArray(ex?.visual_previews)?ex.visual_previews:[])) names.push(String(p?.file_name??''));
+            for(const name of names){
+              if(!name)continue;
+              try{fs.unlinkSync(path.join(publicAssetDirectory,name));}catch{}
+            }
+          }
+          db.prepare('DELETE FROM pack_assets WHERE project_id=?').run(existing.project_id);
+          db.prepare("UPDATE packs SET status='collecting',updated_at=?,build_message_id=NULL,metadata=? WHERE project_id=?")
+            .run(now,JSON.stringify({reopened_at:new Date(now).toISOString(),reason:'rehydrate_source_assets'}),existing.project_id);
+        }
+        const reopened=activePack(chatId)??db.prepare("SELECT * FROM packs WHERE project_id=? LIMIT 1").get(existing.project_id);
+        return res.json(packResponse(reopened,{action:'collect',reply_text:`♻️ SOURCE PACK REOPENED\n\nProject: ${existing.project_id}\nThe saved text brief is retained.\nPlease resend only the PDFs/images/videos, then send /build.`}));
+      }
+
       if(cmd?.name==='retry'){
         if(req.file)throw Object.assign(new Error('retry_command_must_not_include_attachment'),{status:400});
         const requested=String(cmd.arg||'').trim();
@@ -122,6 +169,18 @@ export function createSourcePackRoutes({app,directory,token,allowedChatIds=[],pu
           ? db.prepare("SELECT * FROM packs WHERE project_id=? AND chat_id=? AND status='locked' LIMIT 1").get(requested,chatId)
           : db.prepare("SELECT * FROM packs WHERE chat_id=? AND status='locked' ORDER BY updated_at DESC LIMIT 1").get(chatId);
         if(!retryPack)throw Object.assign(new Error(requested?'retry_project_not_found_or_not_locked':'no_locked_project_available_for_retry'),{status:404});
+        const retryAssets=db.prepare('SELECT public_name,extraction FROM pack_assets WHERE project_id=?').all(retryPack.project_id);
+        let missingFiles=0;
+        for(const row of retryAssets){
+          if(!fileExists(row.public_name))missingFiles++;
+          let ex=null;try{ex=row.extraction?JSON.parse(row.extraction):null;}catch{}
+          for(const p of(Array.isArray(ex?.visual_previews)?ex.visual_previews:[])){
+            if(!fileExists(p?.file_name))missingFiles++;
+          }
+        }
+        if(missingFiles>0){
+          return res.status(409).json(packResponse(retryPack,{ok:false,action:'stop',error:'source_pack_files_missing',missing_files:missingFiles,reply_text:`⚠️ SOURCE PACK NEEDS REHYDRATION\n\nProject: ${retryPack.project_id}\n${missingFiles} retained source file(s)/preview(s) are no longer available.\nSend /reopen ${retryPack.project_id}, resend only the source files, then /build.`}));
+        }
         let sourcePack={};try{sourcePack=retryPack.metadata?JSON.parse(retryPack.metadata):{};}catch{}
         if(!sourcePack?.project_id) sourcePack={schema_version:'source-pack.v1',project_id:retryPack.project_id,source_count:counts(retryPack.project_id).total,brief_messages:[],assets:[],links:[],locked_at:new Date(retryPack.updated_at).toISOString()};
         const synthetic=structuredClone(update);
@@ -160,12 +219,13 @@ export function createSourcePackRoutes({app,directory,token,allowedChatIds=[],pu
             const text=(ex.units??[]).flatMap(u=>(u.paragraphs??[]).map(p=>String(p))).join('\n').slice(0,120000);
             if(text)extracts.push(`SOURCE FILE: ${a.file_name}\n${text}`);
           }
-          return {asset_id:a.asset_id,asset_type:a.asset_type,file_name:a.file_name,mime_type:a.mime_type,size_bytes:a.size_bytes,sha256:a.sha256,url:`${baseFor(req)}/render-assets/${encodeURIComponent(a.public_name)}`,extraction_status:ex?.status??'analysis_required'};
+          const available=fileExists(a.public_name);
+          return {asset_id:a.asset_id,asset_type:a.asset_type,file_name:a.file_name,mime_type:a.mime_type,size_bytes:a.size_bytes,sha256:a.sha256,url:available?publicUrl(req,a.public_name):'',available,extraction_status:ex?.status??'analysis_required'};
         });
         const visualPreviewLines=assetRows.flatMap(a=>{
           let ex=null;try{ex=a.extraction?JSON.parse(a.extraction):null;}catch{}
           const ps=Array.isArray(ex?.visual_previews)?ex.visual_previews:[];
-          return ps.map(p=>`  • preview ${p.kind??'visual'} ${p.index??''}: ${p.url}`);
+          return ps.filter(p=>fileExists(p?.file_name)).map(p=>`  • preview ${p.kind??'visual'} ${p.index??''}: ${publicUrl(req,p.file_name)}`);
         });
         const assetCatalog=assets.length
           ? `SUPPLIED VISUAL/MEDIA ASSETS
