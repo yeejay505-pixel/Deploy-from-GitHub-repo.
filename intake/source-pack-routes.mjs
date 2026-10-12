@@ -52,7 +52,14 @@ export function createSourcePackRoutes({app,directory,token,allowedChatIds=[],pu
       asset_type TEXT NOT NULL, file_name TEXT NOT NULL, mime_type TEXT NOT NULL,
       size_bytes INTEGER NOT NULL, sha256 TEXT NOT NULL, public_name TEXT NOT NULL,
       extraction TEXT, created_at INTEGER NOT NULL,
-      UNIQUE(project_id,telegram_message_id));`);
+      UNIQUE(project_id,telegram_message_id));
+    CREATE TABLE IF NOT EXISTS source_pack_update_receipts(
+      receipt_key TEXT PRIMARY KEY,
+      chat_id TEXT NOT NULL,
+      telegram_message_id INTEGER NOT NULL,
+      update_id TEXT NOT NULL DEFAULT '',
+      created_at INTEGER NOT NULL
+    );`);
 
   const router=express.Router();
   router.use(authMiddleware(token));
@@ -100,10 +107,19 @@ export function createSourcePackRoutes({app,directory,token,allowedChatIds=[],pu
       });
       let metadata={};try{metadata=pack.metadata?JSON.parse(pack.metadata):{};}catch{}
       return res.json({ok:true,schema_version:'source-pack-project.v2',project_id:projectId,chat_id:pack.chat_id,status:pack.status,brief_text:pack.brief_text,events:eventRows,assets,source_count:eventRows.length+assets.length,missing_visual_preview_count:missingVisualPreviewCount,metadata});
-    }catch(e){next(e);}
+    }catch(e){
+      // Failed first attempts remain retryable; only successful/handled deliveries
+      // keep their receipt.
+      if(receiptClaimed&&receiptKey){
+        try{db.prepare('DELETE FROM source_pack_update_receipts WHERE receipt_key=?').run(receiptKey);}catch{}
+      }
+      next(e);
+    }
   });
 
   router.post('/events',upload.single('source'),async(req,res,next)=>{
+    let receiptKey='';
+    let receiptClaimed=false;
     try{
       let body=req.body;
       if(req.is('multipart/form-data')){
@@ -117,6 +133,27 @@ export function createSourcePackRoutes({app,directory,token,allowedChatIds=[],pu
       const raw=String(m.text??m.caption??'').trim();
       const cmd=commandOf(raw);
       const now=Date.now();
+
+      // Telegram/local Bot API delivery is at-least-once. Claim each incoming
+      // update atomically before any reply, source mutation, or downstream dispatch.
+      // A redelivery becomes a silent no-op instead of starting production twice.
+      const updateId=Number.isSafeInteger(update?.update_id)?String(update.update_id):'';
+      receiptKey=updateId?`update:${updateId}`:`message:${chatId}:${m.message_id}`;
+      const claim=db.prepare(
+        'INSERT OR IGNORE INTO source_pack_update_receipts(receipt_key,chat_id,telegram_message_id,update_id,created_at) VALUES(?,?,?,?,?)'
+      ).run(receiptKey,chatId,m.message_id,updateId,now);
+      if(Number(claim.changes??0)===0){
+        return res.json({
+          ok:true,
+          action:'stop',
+          status:'duplicate_ignored',
+          duplicate:true,
+          reply_text:'',
+          telegram_message_id:m.message_id,
+          update_id:update?.update_id??null
+        });
+      }
+      receiptClaimed=true;
 
       if(cmd?.name==='newvideo'){
         if(req.file)throw Object.assign(new Error('newvideo_command_must_not_include_attachment'),{status:400});
