@@ -1,0 +1,84 @@
+{
+  "profile_id": "commercial-explainer-v05",
+  "benchmark_sha256": "bbe16b9b82eb225ee9c6f781c1573a4f6d439ca53e85f316f0c68bdd509c23f4",
+  "presenter": {
+    "asset": {
+      "path": "assets/presenter-poses.png",
+      "sha256": "502b7de7de980c862e211fba359d3480ac75c73acd08f159dc0b1294725d0fb6"
+    },
+    "poses": [
+      {
+        "id": "explain",
+        "crop": [
+          235,
+          10,
+          254,
+          491
+        ],
+        "anchorX": 104.86835427547771
+      },
+      {
+        "id": "point",
+        "crop": [
+          633,
+          12,
+          248,
+          489
+        ],
+        "anchorX": 154.57267046735592
+      },
+      {
+        "id": "open",
+        "crop": [
+          1046,
+          10,
+          316,
+          492
+        ],
+        "anchorX": 149.76133395811053
+      },
+      {
+        "id": "think",
+        "crop": [
+          238,
+          516,
+          189,
+          492
+        ],
+        "anchorX": 93.95240715907948
+      },
+      {
+        "id": "confirm",
+        "crop": [
+          682,
+          515,
+          190,
+          493
+        ],
+        "anchorX": 98.54778279458185
+      },
+      {
+        "id": "speak",
+        "crop": [
+          1101,
+          515,
+          193,
+          493
+        ],
+        "anchorX": 98.57358771640816
+      }
+    ]
+  },
+  "fonts": [
+    {
+      "path": "fonts/DejaVuSans.ttf",
+      "sha256": "ae7b7855e115a5966d8b1b3f80f254ccc117ec86f9965e202ee2940453837280",
+      "role": "regular"
+    },
+    {
+      "path": "fonts/DejaVuSans-Bold.ttf",
+      "sha256": "5c1247acef7f2b8522a31742c76d6adcb5569bacc0be7ceaa4dc39dd252ce895",
+      "role": "bold"
+    }
+  ]
+}

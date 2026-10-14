@@ -1,0 +1,23 @@
+import fs from 'node:fs/promises';
+import path from 'node:path';
+import assert from 'node:assert/strict';
+import {pitchState,sampleTenantRoute} from '../src/semantic/investor-pitch.mjs';
+const [planFile,ledgerFile,output]=process.argv.slice(2);
+const plan=JSON.parse(await fs.readFile(planFile,'utf8')),ledger=JSON.parse(await fs.readFile(ledgerFile,'utf8')),errors=[],check=(ok,text)=>{if(!ok)errors.push(text);};
+const claims=new Map(ledger.claims.map(c=>[c.id,c]));let coverage=0,words=0;
+for(const s of plan.sentences){check(Math.abs(s.start-coverage)<1e-5,`Scene gap:${s.id}`);coverage=s.end;check(s.speechStart>=s.start&&s.speechEnd<=s.end,`Speech outside scene:${s.id}`);for(const id of s.claimIds)check(['qualified','source_definition','verified'].includes(claims.get(id)?.status),`Unreviewed narration claim:${id}`);let end=s.speechStart;for(const w of s.wordTimestamps){check(w.start>=end-.0001&&w.end>w.start&&w.end<=s.speechEnd+.0001,`Word timing:${s.id}/${w.word}`);end=w.end;words++;}}
+check(coverage===60&&plan.duration===60,'Video must be exactly60 seconds');
+const ids=new Set(plan.objects.map(o=>o.id));check(ids.size===plan.objects.length,'Duplicate persistent object');for(const o of plan.objects)if(o.parent)check(ids.has(o.parent),'Missing scene parent');
+const tracks=new Map();for(const a of plan.actions){check(a.end>a.start&&a.start>=0&&a.end<=plan.duration,`Invalid action:${a.id}`);check(ids.has(a.target)||a.target in plan.initialMetrics,`Missing target:${a.id}`);const key=a.target+':'+a.property;if(!tracks.has(key))tracks.set(key,[]);tracks.get(key).push(a);}
+for(const [key,list] of tracks){list.sort((a,b)=>a.start-b.start);const [id,property]=key.split(':');let previous=plan.initialObjects[id]?.[property]??plan.initialMetrics[id],end=0;for(const a of list){check(a.start>=end-1e-5,'Overlapping property track');check(a.from===previous,`State discontinuity:${a.id}`);previous=a.to;end=a.end;}}
+for(const e of plan.soundEvents)check((ids.has(e.target)||e.target in plan.initialMetrics)&&e.at>=0&&e.at<plan.duration&&Math.abs(e.pan)<=1,'Invalid sound cue');
+let priorBuild=.12;for(let f=0;f<1800;f++){const state=pitchState(plan,f/30),build=state.objects.get('asset-main').build,floor=state.objects.get('floor-main');check(build>=priorBuild-1e-8,'Construction regressed');priorBuild=build;check(state.metrics.memberCompanies>=0&&state.metrics.memberCompanies<=plan.metricDefinitions.memberCompanies.target,'Counter outside reviewed data');check(floor.fitout>=0&&floor.fitout<=1&&floor.occupied>=0&&floor.occupied<=1,'Floor state out of bounds');if(floor.occupied>0)check(floor.fitout===1,'Occupants enter before fitout');}
+const c=claims.get(plan.metricDefinitions.memberCompanies.sourceClaimId),target=c?.numbers?.find(n=>n.unit==='new member companies')?.value;
+check(target===plan.metricDefinitions.memberCompanies.target,'Membership counter does not match claim');const speech=plan.sentences.find(s=>s.id==='business'),word=speech.wordTimestamps.find(w=>w.word==='thirty');check(pitchState(plan,word.end).metrics.memberCompanies===target,'Count not settled at end of spoken number');
+const lease=plan.sentences.find(s=>s.id==='lease');check(plan.actions.find(a=>a.target==='rent-gate').start>=lease.start,'Rent gate opens before lease');
+for(let i=0;i<8;i++){let prev=sampleTenantRoute(i,0);for(let n=1;n<=200;n++){const p=sampleTenantRoute(i,n/200);if(prev.y>138&&p.y<=138)check(p.x>-245&&p.x<-191,'Tenant crosses wall');if(prev.y>-68&&p.y<=-68)check(p.x>-194&&p.x<-148,'Tenant crosses north wall');prev=p;}check(prev.settled,'Tenant never settles');}
+let last=0;for(const c of plan.captions){check(c.start>=last-.0001&&c.end>c.start&&c.end<=60,'Invalid captions');last=c.end;}
+// Validate shipped image/voice references exist; the render pipeline never relies on remote URLs.
+for(const file of [plan.assets.presenterMaster,plan.assets.presenterPoses,plan.assets.hero,...Object.values(plan.audioStems)])await fs.access(path.join(path.dirname(planFile),file));
+const report={automatedPass:errors.length===0,errors,measuredWords:words,duration:plan.duration,fullStateFramesChecked:1800,objects:plan.objects.length,actions:plan.actions.length,sentenceBeats:plan.sentenceBeats.length,sfxCues:plan.soundEvents.length,sourceClaims:ledger.claims.length,flaggedSourceClaims:ledger.claims.filter(c=>c.status==='requires_review').length,usedClaims:[...new Set(plan.sentences.flatMap(s=>s.claimIds))],verifiedCount:{value:target,unit:'new member companies',period:'2025',sourceUrl:c.sourceUrl},voiceApproval:'pending',creativeApproval:'pending',releaseEligible:false};
+await fs.writeFile(output,JSON.stringify(report,null,2)+'\n');console.log(JSON.stringify(report));assert.equal(errors.length,0,errors.join('; '));

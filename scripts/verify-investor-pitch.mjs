@@ -1,0 +1,30 @@
+// Validates a supplied review plan and its source ledger, independently of video encoding.
+import fs from 'node:fs/promises';
+import assert from 'node:assert/strict';
+import {createCanvas} from '@napi-rs/canvas';
+import {pitchState,drawInvestorPitch,sampleTenantRoute} from '../src/semantic/investor-pitch.mjs';
+const [planPath,ledgerPath,reportPath]=process.argv.slice(2);
+const plan=JSON.parse(await fs.readFile(planPath,'utf8')),ledger=JSON.parse(await fs.readFile(ledgerPath,'utf8'));
+const claims=new Map(ledger.claims.map(c=>[c.id,c]));let covered=0,words=0;
+const errors=[];const check=(p,msg)=>{if(!p)errors.push(msg);};
+for(const s of plan.sentences){check(Math.abs(s.start-covered)<1e-5,`Scene gap/overlap: ${s.id}`);covered=s.end;check(s.speechStart>=s.start&&s.speechEnd<=s.end,`Speech outside scene: ${s.id}`);for(const id of s.claimIds)check(claims.has(id)&&['qualified','source_definition','verified','illustrative'].includes(claims.get(id).status),`Unreviewed claim in narration: ${id}`);let end=s.speechStart;for(const w of s.wordTimestamps){check(w.start>=end-1e-4&&w.end>w.start&&w.end<=s.speechEnd+1e-4,`Invalid measured word boundary: ${s.id}/${w.word}`);end=w.end;words++;}}
+check(Math.abs(covered-plan.duration)<.0001,'Scene schedule does not match measured audio.');
+let ce=0;for(const c of plan.captions){check(c.start>=ce-1e-4&&c.end>c.start,'Caption overlap or invalid duration');ce=c.end;}
+const ids=new Set(plan.objects.map(o=>o.id));check(ids.size===plan.objects.length,'Duplicate persistent object identity.');for(const o of plan.objects)if(o.parent)check(ids.has(o.parent),`Missing parent: ${o.id}`);
+const tracks=new Map();for(const a of plan.actions){check(a.start>=0&&a.end>a.start&&a.end<=plan.duration,`Invalid action: ${a.id}`);check(ids.has(a.target)||a.target in plan.initialMetrics,`Missing action target: ${a.id}`);const key=a.target+':'+a.property;if(!tracks.has(key))tracks.set(key,[]);tracks.get(key).push(a);}
+for(const [key,tr] of tracks){tr.sort((a,b)=>a.start-b.start);const [id,property]=key.split(':');let value=plan.initialObjects[id]?.[property]??plan.initialMetrics[id],end=0;for(const a of tr){check(a.start>=end,`Overlapping track: ${key}`);check(Math.abs(a.from-value)<1e-7,`Discontinuous state: ${a.id}`);end=a.end;value=a.to;}}
+for(const e of plan.soundEvents)check(ids.has(e.target)&&e.at>=0&&e.at<plan.duration&&Math.abs(e.pan)<=1,`Invalid SFX: ${e.id}`);
+// Every sampled frame obeys shared arithmetic and monotonic construction. No numerical redraw has independent values.
+let priorBuild=.12;for(let f=0;f<Math.ceil(plan.duration*30);f++){const st=pitchState(plan,f/30),m=st.metrics;check(Math.abs(m.invested-m.purchase-m.fitout)<1e-7,'Capital counter divergence');check(Math.abs(m.netYield-m.netIncome/m.invested*100)<1e-7,'Yield formula divergence');check(Math.abs(m.contractGrowth-(m.contractIndex-100))<1e-7,'Contract chart divergence');let b=st.objects.get('asset-main').build;check(b>=priorBuild-1e-7,'Construction regressed');priorBuild=b;}
+const end=pitchState(plan,plan.duration-.001).metrics;check(end.invested===2300000&&end.netIncome===184000&&Math.abs(end.netYield-8)<1e-7,'Worked example does not resolve to 8%.');
+for(const [id,metric,value] of [['capital','fitout',300000],['yield','netIncome',184000]]){const sen=plan.sentences.find(s=>s.id===id),spoken=sen.wordTimestamps.find(w=>w.word==='thousand');check(Math.abs(pitchState(plan,spoken.end).metrics[metric]-value)<1e-7,`Counter does not settle with spoken amount: ${id}`);}
+// Furniture remains in its room and away from the corridor as the selected floor unfolds.
+for(const d of plan.objects.filter(o=>o.type==='desk')){check(d.x-27>=-398&&d.x+27<=100&&d.y-18>=-243&&d.y+65<=138,`Desk/occupier outside workplace: ${d.id}`);if(d.room==='north workspace')check(d.y+65<-68,`North desk crosses wall: ${d.id}`);else check(d.y-18>-68,`South desk crosses wall: ${d.id}`);}
+for(let i=0;i<8;i++){let prior=sampleTenantRoute(i,0);for(let step=1;step<=200;step++){const p=sampleTenantRoute(i,step/200);check(p.x>=-398&&p.x<=100&&p.y>=-243&&p.y<=230,`Tenant route outside plan: ${i}`);if(prior.y>138&&p.y<=138)check(p.x>-245&&p.x<-191,`Tenant crosses south wall outside doorway: ${i}`);if(prior.y>-68&&p.y<=-68)check(p.x>-194&&p.x<-148,`Tenant crosses north wall outside doorway: ${i}`);prior=p;}check(prior.settled,`Tenant ${i} never settles`);}
+const canvas=createCanvas(1080,1920),ctx=canvas.getContext('2d');let drawn=0,textChecks=0;const textWarnings=[];
+const orig=ctx.fillText.bind(ctx);
+ctx.fillText=function(s,x,y,...rest){const box=ctx.measureText(s),m=ctx.getTransform(),align=ctx.textAlign;const ox=align==='center'?-box.width/2:align==='right'?-box.width:0;const p1={x:m.a*(x+ox)+m.c*y+m.e,y:m.b*(x+ox)+m.d*y+m.f},p2={x:p1.x+box.width*m.a,y:p1.y+box.width*m.b};textChecks++;if(Math.min(p1.x,p2.x)<35||Math.max(p1.x,p2.x)>1045||p1.y<40||p1.y>1880)textWarnings.push({text:String(s),x:p1.x,y:p1.y,x2:p2.x});return orig(s,x,y,...rest);};
+for(let t=0;t<plan.duration;t+=.4){drawInvestorPitch(ctx,plan,t,{onText:x=>{check(x.width<=930,`Headline/caption overflow: ${x.text}`);check(x.kind!=='caption'||x.size>=35,'Caption too small');}});drawn++;}
+check(textWarnings.length===0,'Visible text outside safe margins');
+const report={automatedPass:errors.length===0,errors,textWarnings,reviewFramesDrawn:drawn,textChecks,fullStateFramesChecked:Math.ceil(plan.duration*30),measuredWords:words,sourceRange:plan.sourceSlides,narrationClaims:plan.sentences.flatMap(s=>s.claimIds),flaggedSourceClaims:ledger.claims.filter(c=>c.status==='requires_review').length,example:{purchase:end.purchase,fitout:end.fitout,capital:end.invested,annualNetIncome:end.netIncome,netYield:end.netYield},humanCreativeApproval:'pending',voiceApproval:'pending',releaseEligible:false,limits:['Review sampling cannot certify visual appeal.','Guide voice remains synthetic and needs final selection/approval.','Future returns and leasing outcomes are not assured.']};
+await fs.writeFile(reportPath,JSON.stringify(report,null,2)+'\n');console.log(JSON.stringify(report));assert.equal(errors.length,0,errors.join('; '));

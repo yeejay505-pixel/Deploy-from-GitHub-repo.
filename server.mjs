@@ -3,21 +3,29 @@ import path from 'node:path';
 import fs from 'node:fs/promises';
 import {fileURLToPath} from 'node:url';
 import {bundle} from '@remotion/bundler';
-import {renderFrames,selectComposition} from '@remotion/renderer';
+import {renderFrames,renderStill,selectComposition} from '@remotion/renderer';
 import {spawn} from 'node:child_process';
 import multer from 'multer';
 import {createAssemblyHandler} from './assembly.mjs';
 import {createPremiumAssemblyHandler} from './premium-assembly.mjs';
+import {createAuditFramesHandler} from './audit-frames.mjs';
+import {createSemanticRoutes} from './semantic-preview.mjs';
 
 const here=path.dirname(fileURLToPath(import.meta.url));
 const outputs=path.join(here,'outputs');
 const uploads=path.join(here,'uploads');
 const frameRoot=path.join(here,'frame-cache');
 const stagedRoot=path.join(here,'staged-media');
+// Source-pack originals and derived previews must survive Railway deployments.
+// INTAKE_STORE_DIR is mounted on the persistent Railway volume.
+const sourceAssetRoot=process.env.INTAKE_STORE_DIR
+  ? path.join(process.env.INTAKE_STORE_DIR,'source-assets')
+  : stagedRoot;
 await fs.mkdir(outputs,{recursive:true});
 await fs.mkdir(uploads,{recursive:true});
 await fs.mkdir(frameRoot,{recursive:true});
 await fs.mkdir(stagedRoot,{recursive:true});
+await fs.mkdir(sourceAssetRoot,{recursive:true});
 
 const app=express();
 app.set('trust proxy',1);
@@ -76,13 +84,39 @@ function normalizeScene(raw={}){
 }
 
 app.use(express.json({limit:'12mb'}));
+// Opt-in intake API, registered before renderer authentication so it can use
+// its own credential. Existing renderer routes and startup remain unchanged.
+if(process.env.INTAKE_STORE_DIR){
+  const {createIntakeRoutes}=await import('./intake/gateway-routes.mjs');
+  const profile=JSON.parse(await fs.readFile(path.join(here,'quality/approved-visual-reference.json'),'utf8'));
+  const bindings=process.env.INTAKE_BINDINGS_FILE?JSON.parse(await fs.readFile(process.env.INTAKE_BINDINGS_FILE,'utf8')):{};
+  if(process.env.INTAKE_RESEARCH_WORKFLOW_ID && bindings.research_story){ bindings.research_story.workflow_id=process.env.INTAKE_RESEARCH_WORKFLOW_ID; }
+  const {createSourcePackRoutes}=await import('./intake/source-pack-routes.mjs');
+  const sourcePack=createSourcePackRoutes({app,directory:process.env.INTAKE_STORE_DIR,token:process.env.INTAKE_TOKEN,
+    allowedChatIds:JSON.parse(process.env.INTAKE_ALLOWED_CHAT_IDS||'["8580375575"]'),publicAssetDirectory:sourceAssetRoot});
+  const intake=createIntakeRoutes({app,directory:process.env.INTAKE_STORE_DIR,token:process.env.INTAKE_TOKEN,
+    profile,bindings,allowedChatIds:JSON.parse(process.env.INTAKE_ALLOWED_CHAT_IDS||'["8580375575"]'),
+    durableStorageConfirmed:process.env.INTAKE_DURABLE_STORAGE_CONFIRMED==='1',forbiddenDirectories:[here],
+    reviewedPlans:{enabled:process.env.INTAKE_REVIEWED_PLAN_ENABLED==='1'},
+    reviewRead:{token:process.env.INTAKE_REVIEW_READ_TOKEN||'',eventId:process.env.INTAKE_REVIEW_READ_EVENT_ID||'',expiresAt:Number(process.env.INTAKE_REVIEW_READ_EXPIRES_AT||0)},
+    intelligence:{model:process.env.INTAKE_INTELLIGENCE_MODEL||'',paidCallsEnabled:process.env.INTAKE_INTELLIGENCE_PAID_ENABLED==='1'},
+    render:{workerEventId:process.env.INTAKE_RENDER_WORKER_EVENT_ID||'',pinnedReview:process.env.INTAKE_RENDER_PINNED_REVIEW?JSON.parse(process.env.INTAKE_RENDER_PINNED_REVIEW):null,assetDirectory:process.env.INTAKE_RENDER_ASSET_DIR||'',guideEnabled:process.env.INTAKE_RENDER_GUIDE_ENABLED==='1',workerEnabled:process.env.INTAKE_RENDER_WORKER_ENABLED==='1'}});
+  for(const signal of ['SIGTERM','SIGINT'])process.once(signal,()=>{Promise.all([Promise.resolve(intake.close()),Promise.resolve(sourcePack.close())]).then(()=>process.exit(0));});
+}
 app.use('/outputs',express.static(outputs));
-app.use('/render-assets',express.static(stagedRoot));
+// Durable source-pack assets first; ephemeral staged render media remains available too.
+app.use('/render-assets',express.static(sourceAssetRoot));
+if(sourceAssetRoot!==stagedRoot) app.use('/render-assets',express.static(stagedRoot));
 
 app.use((req,res,next)=>{
   if(!TOKEN||req.path==='/health')return next();
   if((req.get('authorization')||'')!==`Bearer ${TOKEN}`) return res.status(401).json({ok:false,error:'Unauthorized'});
   next();
+});
+
+createSemanticRoutes({
+  app,outputs,token:TOKEN,baseUrl:publicBase,
+  enqueue:job=>{const p=queue.then(job,job);queue=p.catch(()=>{});return p;}
 });
 
 app.get('/health',async(req,res)=>{
@@ -91,8 +125,8 @@ app.get('/health',async(req,res)=>{
   res.json({
     ok:true,
     service:'explainer-render-worker',
-    version:'0.15.0',
-    renderProfile:'universal-media-aware-1080x1920+preview+final-assembly',
+    version:'0.16.0',
+    renderProfile:'universal-source-bound-media-aware-1080x1920+preview+final-assembly',
     strategy:'staged-media+renderFrames-system-ffmpeg+sequential-scene-rendering',
     memoryMax,
     heapMb:Math.round(process.memoryUsage().heapUsed/1024/1024)
@@ -221,7 +255,7 @@ async function renderProductionOne(body,req){
   await fs.mkdir(frameDir,{recursive:true});
 
   try{
-    await renderFrames({
+    const renderAttempt=()=>renderFrames({
       composition,
       serveUrl,
       outputDir:frameDir,
@@ -236,7 +270,21 @@ async function renderProductionOne(body,req){
       chromiumOptions:{enableMultiProcessOnLinux:false}
     });
 
-    await new Promise(r=>setTimeout(r,250));
+    await renderAttempt();
+    await new Promise(r=>setTimeout(r,500));
+
+    let frames=(await fs.readdir(frameDir).catch(()=>[])).filter(x=>/^element-\d+\.jpeg$/i.test(x));
+    if(!frames.length){
+      console.warn('No frames after first universal render attempt; retrying scene',sceneManifest.scene_id);
+      await fs.rm(frameDir,{recursive:true,force:true}).catch(()=>{});
+      await fs.mkdir(frameDir,{recursive:true});
+      await renderAttempt();
+      await new Promise(r=>setTimeout(r,750));
+      frames=(await fs.readdir(frameDir).catch(()=>[])).filter(x=>/^element-\d+\.jpeg$/i.test(x));
+    }
+    if(!frames.length){
+      throw new Error(`Universal renderer produced zero JPEG frames for ${sceneManifest.scene_id}`);
+    }
 
     const pattern=path.join(frameDir,'element-%03d.jpeg');
     await new Promise((resolve,reject)=>{
@@ -283,7 +331,7 @@ async function renderProductionOne(body,req){
     durationSeconds:composition.durationInFrames/composition.fps,
     strategy:scale===1?'production-native-1080x1920-remotion-2.5d-full-film':'production-preview-remotion-2.5d-full-film',
     renderProfile:normalizedProfile,
-    rendererVersion:'0.15.0'
+    rendererVersion:'0.16.0'
   };
 }
 
@@ -362,39 +410,244 @@ async function renderUniversalOne(body,req){
   await fs.mkdir(frameDir,{recursive:true});
 
   try{
-    await renderFrames({
-      composition,
-      serveUrl,
-      outputDir:frameDir,
-      inputProps,
-      imageFormat:'jpeg',
-      jpegQuality:scale===1?82:74,
-      scale,
-      concurrency:1,
-      muted:true,
-      logLevel:'warn',
-      browserExecutable:process.env.REMOTION_BROWSER_EXECUTABLE||undefined,
-      chromiumOptions:{enableMultiProcessOnLinux:false}
-    });
+    const expectedFrames=Math.max(1,Number(composition.durationInFrames||0));
+    const durationSeconds=expectedFrames/Number(composition.fps||30);
+    const shortScene=durationSeconds<=5;
+    const stillFallbackEligible=durationSeconds<=3;
+    const maxAttempts=shortScene?4:2;
 
-    await new Promise(r=>setTimeout(r,250));
+    const inspectFrames=async()=>{
+      const frames=(await fs.readdir(frameDir).catch(()=>[]))
+        .filter(x=>/^element-\d+\.jpeg$/i.test(x))
+        .sort((a,b)=>{
+          const ai=Number((a.match(/(\d+)/)||[])[1]||0);
+          const bi=Number((b.match(/(\d+)/)||[])[1]||0);
+          return ai-bi;
+        });
 
-    const pattern=path.join(frameDir,'element-%03d.jpeg');
-    await new Promise((resolve,reject)=>{
-      const args=[
-        '-y','-framerate',String(composition.fps),'-i',pattern,
-        '-c:v','libx264','-preset','superfast','-crf',scale===1?'18':'21',
-        '-pix_fmt','yuv420p','-movflags','+faststart',outputLocation
-      ];
-      const ff=spawn('ffmpeg',args,{stdio:['ignore','pipe','pipe']});
-      let stderr='';
-      ff.stderr.on('data',d=>{stderr+=d.toString();if(stderr.length>12000)stderr=stderr.slice(-12000);});
-      ff.on('error',reject);
-      ff.on('close',(code,signal)=>{
-        if(code===0)return resolve();
-        reject(new Error(`Universal FFmpeg failed with code ${code}${signal?` (${signal})`:''}: ${stderr.slice(-5000)}`));
+      const indexes=frames.map(x=>Number((x.match(/(\d+)/)||[])[1]||-1));
+      const unique=new Set(indexes);
+      const first=indexes.length?Math.min(...indexes):-1;
+      const last=indexes.length?Math.max(...indexes):-1;
+      const contiguous=indexes.length===unique.size &&
+        first===0 &&
+        last===expectedFrames-1 &&
+        indexes.length===expectedFrames;
+
+      return {frames,indexes,contiguous,first,last};
+    };
+
+    const renderAttempt=async(attempt)=>{
+      await fs.rm(frameDir,{recursive:true,force:true}).catch(()=>{});
+      await fs.mkdir(frameDir,{recursive:true});
+
+      await renderFrames({
+        composition,
+        serveUrl,
+        outputDir:frameDir,
+        inputProps,
+        imageFormat:'jpeg',
+        jpegQuality:scale===1?82:74,
+        scale,
+        concurrency:1,
+        muted:true,
+        logLevel:'warn',
+        browserExecutable:process.env.REMOTION_BROWSER_EXECUTABLE||undefined,
+        chromiumOptions:{enableMultiProcessOnLinux:false}
       });
-    });
+
+      await new Promise(r=>setTimeout(r,shortScene?1200:600));
+
+      const validation=await inspectFrames();
+
+      console.log('universal frame validation',{
+        sceneId:sceneManifest.scene_id,
+        attempt,
+        shortScene,
+        expectedFrames,
+        actualFrames:validation.frames.length,
+        firstFrame:validation.first,
+        lastFrame:validation.last,
+        contiguous:validation.contiguous
+      });
+
+      return validation;
+    };
+
+    const renderStillFallback=async()=>{
+      console.warn('Universal short-scene renderFrames exhausted; switching to renderStill frame-by-frame fallback',{
+        sceneId:sceneManifest.scene_id,
+        durationSeconds,
+        expectedFrames
+      });
+
+      await fs.rm(frameDir,{recursive:true,force:true}).catch(()=>{});
+      await fs.mkdir(frameDir,{recursive:true});
+
+      for(let frame=0;frame<expectedFrames;frame++){
+        const out=path.join(frameDir,`element-${String(frame).padStart(3,'0')}.jpeg`);
+        await renderStill({
+          composition,
+          serveUrl,
+          output:out,
+          inputProps,
+          frame,
+          imageFormat:'jpeg',
+          jpegQuality:scale===1?82:74,
+          scale,
+          logLevel:'warn',
+          browserExecutable:process.env.REMOTION_BROWSER_EXECUTABLE||undefined,
+          chromiumOptions:{enableMultiProcessOnLinux:false}
+        });
+
+        if((frame+1)%10===0 || frame===expectedFrames-1){
+          console.log('universal renderStill fallback progress',{
+            sceneId:sceneManifest.scene_id,
+            renderedFrames:frame+1,
+            expectedFrames
+          });
+        }
+      }
+
+      const validation=await inspectFrames();
+      console.log('universal renderStill fallback validation',{
+        sceneId:sceneManifest.scene_id,
+        expectedFrames,
+        actualFrames:validation.frames.length,
+        firstFrame:validation.first,
+        lastFrame:validation.last,
+        contiguous:validation.contiguous
+      });
+      return validation;
+    };
+
+    let validation=null;
+    let lastFrameError=null;
+
+    for(let attempt=1;attempt<=maxAttempts;attempt++){
+      try{
+        validation=await renderAttempt(attempt);
+        lastFrameError=null;
+      }catch(e){
+        lastFrameError=e;
+        validation=await inspectFrames();
+        console.warn('Universal renderFrames attempt threw',{
+          sceneId:sceneManifest.scene_id,
+          attempt,
+          error:compactError(e),
+          actualFrames:validation.frames.length
+        });
+      }
+
+      if(validation?.contiguous) break;
+
+      if(attempt<maxAttempts){
+        console.warn(
+          'Universal frame validation failed; retrying scene',
+          sceneManifest.scene_id,
+          `attempt ${attempt}/${maxAttempts}`,
+          `expected ${expectedFrames}, got ${validation?.frames?.length||0}`
+        );
+        await new Promise(r=>setTimeout(r,shortScene?1400:700));
+      }
+    }
+
+    if(!validation?.contiguous && stillFallbackEligible){
+      try{
+        validation=await renderStillFallback();
+        lastFrameError=null;
+      }catch(e){
+        lastFrameError=e;
+        validation=await inspectFrames();
+        console.error('Universal renderStill fallback failed',{
+          sceneId:sceneManifest.scene_id,
+          error:compactError(e),
+          actualFrames:validation.frames.length
+        });
+      }
+    }
+
+    if(!validation?.contiguous){
+      const detail=lastFrameError?`; lastError=${compactError(lastFrameError)}`:'';
+      throw new Error(
+        `Universal renderer frame validation failed for ${sceneManifest.scene_id}: expected ${expectedFrames} contiguous JPEG frames (0-${expectedFrames-1}), got ${validation?.frames?.length||0}; first=${validation?.first??-1}, last=${validation?.last??-1}${detail}`
+      );
+    }
+
+    const encodeDir=path.join(frameDir,'ffmpeg-sequence');
+    await fs.rm(encodeDir,{recursive:true,force:true}).catch(()=>{});
+    await fs.mkdir(encodeDir,{recursive:true});
+
+    // Remotion's JPEG filename padding can vary by frame count. Normalize the
+    // validated sequence to a fixed 6-digit FFmpeg pattern before encoding.
+    for(let i=0;i<validation.frames.length;i++){
+      const source=path.join(frameDir,validation.frames[i]);
+      const target=path.join(encodeDir,`frame-${String(i).padStart(6,'0')}.jpeg`);
+      await fs.copyFile(source,target);
+    }
+
+    const normalizedFrames=(await fs.readdir(encodeDir).catch(()=>[]))
+      .filter(x=>/^frame-\d{6}\.jpeg$/i.test(x))
+      .sort();
+
+    if(normalizedFrames.length!==expectedFrames){
+      throw new Error(
+        `Universal FFmpeg sequence normalization failed for ${sceneManifest.scene_id}: expected ${expectedFrames}, got ${normalizedFrames.length}`
+      );
+    }
+
+    const pattern=path.join(encodeDir,'frame-%06d.jpeg');
+
+    const encodeAttempt=async(attempt)=>{
+      await fs.rm(outputLocation,{force:true}).catch(()=>{});
+      return await new Promise((resolve,reject)=>{
+        const args=[
+          '-y','-framerate',String(composition.fps),'-start_number','0','-i',pattern,
+          '-c:v','libx264','-preset','superfast','-crf',scale===1?'18':'21',
+          '-pix_fmt','yuv420p','-movflags','+faststart',outputLocation
+        ];
+        const ff=spawn('ffmpeg',args,{stdio:['ignore','pipe','pipe']});
+        let stderr='';
+        ff.stderr.on('data',d=>{stderr+=d.toString();if(stderr.length>12000)stderr=stderr.slice(-12000);});
+        ff.on('error',reject);
+        ff.on('close',async(code,signal)=>{
+          if(code!==0){
+            return reject(new Error(`Universal FFmpeg failed with code ${code}${signal?` (${signal})`:''}: ${stderr.slice(-5000)}`));
+          }
+          try{
+            const stat=await fs.stat(outputLocation);
+            if(!(stat.size>1024)) return reject(new Error(`Universal FFmpeg produced invalid output for ${sceneManifest.scene_id}: ${stat.size} bytes`));
+            return resolve({size:stat.size,attempt});
+          }catch(e){
+            return reject(new Error(`Universal FFmpeg output missing for ${sceneManifest.scene_id}: ${e?.message||e}`));
+          }
+        });
+      });
+    };
+
+    let encodeResult=null;
+    let encodeError=null;
+    for(let attempt=1;attempt<=3;attempt++){
+      try{
+        encodeResult=await encodeAttempt(attempt);
+        console.log('universal ffmpeg encode success',{
+          sceneId:sceneManifest.scene_id,
+          attempt,
+          outputBytes:encodeResult.size
+        });
+        encodeError=null;
+        break;
+      }catch(e){
+        encodeError=e;
+        console.warn('universal ffmpeg encode attempt failed',{
+          sceneId:sceneManifest.scene_id,
+          attempt,
+          error:compactError(e)
+        });
+        if(attempt<3) await new Promise(r=>setTimeout(r,800*attempt));
+      }
+    }
+    if(encodeError) throw encodeError;
   }finally{
     await fs.rm(frameDir,{recursive:true,force:true}).catch(()=>{});
   }
@@ -413,7 +666,7 @@ async function renderUniversalOne(body,req){
     durationSeconds:composition.durationInFrames/composition.fps,
     strategy:scale===1?'universal-native-1080x1920-media-aware':'universal-preview-540x960-media-aware',
     renderProfile:normalizedProfile,
-    rendererVersion:'0.15.0'
+    rendererVersion:'0.16.0'
   };
 }
 
@@ -448,6 +701,63 @@ app.post('/cleanup-staged-media',async(req,res)=>{
   if(!projectId||!build) return res.status(400).json({ok:false,error:'Missing project/build'});
   await fs.rm(path.join(stagedRoot,projectId,build),{recursive:true,force:true}).catch(()=>{});
   res.json({ok:true,projectId,productionBuildVersion:build});
+});
+
+app.post('/validate-source-bindings',async(req,res)=>{
+  try{
+    const body=req.body||{};
+    const bindings=Array.isArray(body.bindings)?body.bindings:[];
+    const unique=[...new Map(bindings.map(b=>[String(b.url||''),b])).values()]
+      .filter(b=>/^https?:\/\//i.test(String(b.url||'')));
+
+    const checked=[];
+    const failed=[];
+
+    for(const b of unique){
+      const url=String(b.url||'');
+      let ok=false,status=0,error='';
+      try{
+        let response=await fetch(url,{method:'HEAD',redirect:'follow',signal:AbortSignal.timeout(12000)});
+        status=response.status;
+        ok=response.ok;
+        if(!ok || status===405){
+          response=await fetch(url,{
+            method:'GET',
+            headers:{Range:'bytes=0-2047'},
+            redirect:'follow',
+            signal:AbortSignal.timeout(15000)
+          });
+          status=response.status;
+          ok=response.ok || status===206;
+          try{await response.body?.cancel();}catch{}
+        }
+      }catch(e){
+        error=compactError(e);
+      }
+      const row={
+        scene_id:String(b.scene_id||''),
+        preview_id:String(b.preview_id||''),
+        asset_id:String(b.asset_id||''),
+        url,
+        ok,
+        status,
+        error
+      };
+      checked.push(row);
+      if(!ok) failed.push(row);
+    }
+
+    res.status(failed.length?422:200).json({
+      ok:failed.length===0,
+      projectId:String(body.projectId||''),
+      checked_count:checked.length,
+      failed_count:failed.length,
+      checked,
+      failed
+    });
+  }catch(e){
+    res.status(500).json({ok:false,error:compactError(e)});
+  }
 });
 
 app.post('/render-universal-scene',(req,res)=>{
@@ -487,7 +797,7 @@ app.post('/render-universal-batch',async(req,res)=>{
     rendered:results.length-failed,
     failed,
     results,
-    rendererVersion:'0.15.0',
+    rendererVersion:'0.16.0',
     strategy:'universal-sequential-media-aware'
   });
 });
@@ -558,7 +868,7 @@ app.post('/render-production-batch',async(req,res)=>{
     rendered:results.length-failed,
     failed,
     results,
-    rendererVersion:'0.15.0'
+    rendererVersion:'0.16.0'
   });
 });
 
@@ -619,6 +929,8 @@ app.post('/refresh-scenes',async(req,res)=>{
     results
   });
 });
+
+app.post('/audit-frames',upload.single('video'),createAuditFramesHandler({outputs}));
 
 app.post('/assemble-final',upload.single('voice'),createAssemblyHandler({here,outputs}));
 

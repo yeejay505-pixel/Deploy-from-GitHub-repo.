@@ -1,0 +1,39 @@
+{
+  "schema_version": "visual-reference.v1",
+  "profile_id": "commercial-explainer-v05",
+  "engine": "Animated AI Explainer Videos",
+  "approved_at": "2026-10-03",
+  "approval_scope": "visual_design_and_animation",
+  "approval_evidence": "Perfect this is good. Now keep this as a reference point, we will only improve from here with new idea and projects.",
+  "reference": {
+    "file": "Commercial_Offplan_Supply_Gap_Investor_Pitch_v05.mp4",
+    "sha256": "bbe16b9b82eb225ee9c6f781c1573a4f6d439ca53e85f316f0c68bdd509c23f4",
+    "library_file_id": "libfile_7ef940c479cc8191a346328ed436f529",
+    "library_version": 4,
+    "source_commit": "5d1e7ccf7a0534b2ed847f17f797a1aa5371b8ec"
+  },
+  "defaults": {
+    "format": "9:16",
+    "width": 1080,
+    "height": 1920,
+    "fps": 30,
+    "background": "white / light material-appropriate",
+    "palette": "white, sage, deep green, copper",
+    "presenter": "current Emirati presenter in white kandura; replaceable by explicit creative revision",
+    "narrative_spine": "Problem → mechanism → consequence",
+    "timing": "measured narration; do not rush the full script to fit a nominal duration"
+  },
+  "required_sentence_fields": ["visual_metaphor", "persistent_objects", "state_before", "visible_action", "state_after", "quantity_treatment", "text_role", "sound_cue", "transition"],
+  "quality_rules": [
+    "Every important sentence changes the explanatory diagram meaningfully; captions and presenter pose changes alone do not qualify.",
+    "Stable object identities carry cause, action and consequence across scenes.",
+    "Use deterministic SVG/canvas for exact text, charts, labels, counters and continuity-critical objects.",
+    "Use generated presenter masters, illustrations and textures selectively; they must not carry exact quantities or readable text.",
+    "Charts and counters read the same source values; distinguish differing periods, denominators and samples.",
+    "Synchronize motion, captions and purposeful SFX to measured narration.",
+    "Render reproducibly from local assets, fonts, claim ledger and JSON manifests, then run content, continuity, readability and technical QC.",
+    "A new topic requires its own visual review against this reference; do not copy a fixed scene count or claim the hard-coded example is universal."
+  ],
+  "scope_status": {"visual_reference": "approved", "final_voice": "pending", "numeric_source_assertions": "verification_pending", "publication": "not_approved", "live_automation": "not_connected"},
+  "release_eligible": false
+}

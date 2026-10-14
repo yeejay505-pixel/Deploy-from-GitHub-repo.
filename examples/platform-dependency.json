@@ -1,0 +1,300 @@
+{
+  "version": "semantic-scene-1",
+  "sceneId": "platform-dependency-01",
+  "duration": 20,
+  "timingBasis": "draft",
+  "disclaimer": "ILLUSTRATIVE MODEL / NOT MARKET DATA / VOICE PENDING",
+  "claims": [
+    {
+      "id": "model-01",
+      "text": "Customer quantities illustrate dependency; they are not observed market data.",
+      "status": "illustrative",
+      "source": "Conceptual example"
+    }
+  ],
+  "metrics": [
+    {
+      "id": "demand",
+      "initial": 2,
+      "max": 12,
+      "prefix": "",
+      "suffix": ""
+    }
+  ],
+  "objects": [
+    {
+      "id": "platform",
+      "type": "platform",
+      "label": "PLATFORM",
+      "x": 100,
+      "y": 620,
+      "w": 320,
+      "h": 230,
+      "color": "#85D8E2",
+      "opacity": 1,
+      "progress": 1,
+      "rotation": 0,
+      "metric": ""
+    },
+    {
+      "id": "business",
+      "type": "shop",
+      "label": "YOUR BUSINESS",
+      "x": 630,
+      "y": 600,
+      "w": 350,
+      "h": 250,
+      "color": "#9DDDAC",
+      "opacity": 1,
+      "progress": 1,
+      "rotation": 0,
+      "metric": ""
+    },
+    {
+      "id": "flow",
+      "type": "connector",
+      "label": "",
+      "x": 425,
+      "y": 745,
+      "w": 195,
+      "h": 0,
+      "color": "#85D8E2",
+      "opacity": 1,
+      "progress": 1,
+      "rotation": 0,
+      "metric": ""
+    },
+    {
+      "id": "demand-cart",
+      "type": "cart",
+      "label": "CUSTOMERS",
+      "x": 165,
+      "y": 1040,
+      "w": 350,
+      "h": 180,
+      "color": "#85D8E2",
+      "opacity": 1,
+      "progress": 1,
+      "rotation": 0,
+      "metric": "demand"
+    },
+    {
+      "id": "demand-counter",
+      "type": "counter",
+      "label": "ACTIVE CUSTOMERS",
+      "x": 680,
+      "y": 985,
+      "w": 265,
+      "h": 125,
+      "color": "#9DDDAC",
+      "opacity": 1,
+      "progress": 1,
+      "rotation": 0,
+      "metric": "demand"
+    },
+    {
+      "id": "demand-bar",
+      "type": "bar",
+      "label": "",
+      "x": 710,
+      "y": 1120,
+      "w": 180,
+      "h": 280,
+      "color": "#9DDDAC",
+      "opacity": 1,
+      "progress": 1,
+      "rotation": 0,
+      "metric": "demand"
+    },
+    {
+      "id": "withdrawal",
+      "type": "label",
+      "label": "SUPPORT WITHDRAWN",
+      "x": 105,
+      "y": 530,
+      "w": 300,
+      "h": 45,
+      "color": "#EF8585",
+      "opacity": 0,
+      "progress": 1,
+      "rotation": 0,
+      "metric": ""
+    }
+  ],
+  "actions": [
+    {
+      "id": "grow-demand",
+      "target": "demand",
+      "property": "value",
+      "start": 0.6,
+      "end": 6.5,
+      "from": 2,
+      "to": 12,
+      "easing": "smooth"
+    },
+    {
+      "id": "cart-moves",
+      "target": "demand-cart",
+      "property": "x",
+      "start": 0.6,
+      "end": 6.5,
+      "from": 165,
+      "to": 230,
+      "easing": "smooth"
+    },
+    {
+      "id": "support-off",
+      "target": "platform",
+      "property": "progress",
+      "start": 8.3,
+      "end": 9.8,
+      "from": 1,
+      "to": 0,
+      "easing": "smooth"
+    },
+    {
+      "id": "flow-stops",
+      "target": "flow",
+      "property": "progress",
+      "start": 8.8,
+      "end": 10.4,
+      "from": 1,
+      "to": 0,
+      "easing": "smooth"
+    },
+    {
+      "id": "withdrawal-label",
+      "target": "withdrawal",
+      "property": "opacity",
+      "start": 8.3,
+      "end": 9,
+      "from": 0,
+      "to": 1,
+      "easing": "smooth"
+    },
+    {
+      "id": "lose-demand",
+      "target": "demand",
+      "property": "value",
+      "start": 11.2,
+      "end": 15.4,
+      "from": 12,
+      "to": 3,
+      "easing": "smooth"
+    }
+  ],
+  "beats": [
+    {
+      "id": "b1",
+      "start": 0,
+      "end": 3,
+      "narration": "A platform can bring customers to your business.",
+      "headline": "A SOURCE OF DEMAND.",
+      "focus": "platform",
+      "cause": "Platform support is available",
+      "action": "Demand moves toward the business",
+      "consequence": "The business receives customers",
+      "mode": "change",
+      "claimIds": [
+        "model-01"
+      ]
+    },
+    {
+      "id": "b2",
+      "start": 3,
+      "end": 7,
+      "narration": "At first, that looks like growth.",
+      "headline": "GROWTH LOOKS GOOD.",
+      "focus": "demand-cart",
+      "cause": "Incoming demand continues",
+      "action": "Customer quantity and bar increase together",
+      "consequence": "More customers are visible",
+      "mode": "change",
+      "claimIds": [
+        "model-01"
+      ]
+    },
+    {
+      "id": "b3",
+      "start": 7,
+      "end": 11,
+      "narration": "But watch what happens when that support disappears.",
+      "headline": "NOW REMOVE THE SUPPORT.",
+      "focus": "platform",
+      "cause": "The external support is withdrawn",
+      "action": "Platform light and connection switch off",
+      "consequence": "Incoming flow stops",
+      "mode": "change",
+      "claimIds": [
+        "model-01"
+      ]
+    },
+    {
+      "id": "b4",
+      "start": 11,
+      "end": 16,
+      "narration": "Customers fall away.",
+      "headline": "THE DEPENDENCY APPEARS.",
+      "focus": "demand-cart",
+      "cause": "The external flow has stopped",
+      "action": "Customer count and bar fall together",
+      "consequence": "The remaining demand is smaller",
+      "mode": "change",
+      "claimIds": [
+        "model-01"
+      ]
+    },
+    {
+      "id": "b5",
+      "start": 16,
+      "end": 20,
+      "narration": "Growth matters. So does what keeps it growing.",
+      "headline": "WHAT KEEPS IT GROWING?",
+      "focus": "business",
+      "cause": "The comparison is now visible",
+      "action": "Hold the completed result for inspection",
+      "consequence": "The viewer can distinguish growth from durable demand",
+      "mode": "hold",
+      "claimIds": [
+        "model-01"
+      ]
+    }
+  ],
+  "cues": [
+    {
+      "time": 0.6,
+      "type": "whoosh",
+      "target": "demand-cart"
+    },
+    {
+      "time": 3,
+      "type": "arrival",
+      "target": "demand"
+    },
+    {
+      "time": 6.5,
+      "type": "click",
+      "target": "demand"
+    },
+    {
+      "time": 8.3,
+      "type": "click",
+      "target": "platform"
+    },
+    {
+      "time": 10.4,
+      "type": "whoosh",
+      "target": "flow"
+    },
+    {
+      "time": 11.2,
+      "type": "whoosh",
+      "target": "demand-cart"
+    },
+    {
+      "time": 15.4,
+      "type": "resolve",
+      "target": "demand"
+    }
+  ]
+}

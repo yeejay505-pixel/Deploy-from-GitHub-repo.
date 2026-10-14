@@ -1,0 +1,460 @@
+{
+  "name": "Explainer Engine — 04R Durable Source Render — DRAFT",
+  "active": false,
+  "nodes": [
+    {
+      "id": "manual-dry-run",
+      "name": "Manual Dry Run",
+      "type": "n8n-nodes-base.manualTrigger",
+      "typeVersion": 1,
+      "position": [
+        0,
+        0
+      ],
+      "parameters": {}
+    },
+    {
+      "id": "example-accepted-draft",
+      "name": "Example Accepted Draft",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        220,
+        0
+      ],
+      "parameters": {
+        "jsCode": "return [{json:{schema_version:'intake-receipt.v1',idempotency_key:'FIXTURE_ONLY_NOT_A_STORED_EVENT',accepted:true,receipt_id:'FIXTURE',benchmark_sha256:'FIXTURE',release_eligible:false}}];"
+      }
+    },
+    {
+      "id": "when-executed-by-intelligence",
+      "name": "When Executed By Intelligence",
+      "type": "n8n-nodes-base.executeWorkflowTrigger",
+      "typeVersion": 1.1,
+      "position": [
+        220,
+        240
+      ],
+      "parameters": {
+        "inputSource": "passthrough"
+      }
+    },
+    {
+      "id": "configure-render-adapter",
+      "name": "Configure Render Adapter",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        440,
+        120
+      ],
+      "parameters": {
+        "jsCode": "const items=$input.all();if(items.length!==1)throw Error('One accepted draft per execution required.');return items.map(i=>({json:{handoff:i.json,event_id:i.json.idempotency_key,config:{\"enabled\":false,\"base_url\":\"https://REPLACE_WITH_EXISTING_RENDERER_HOST\",\"max_polls\":120}}}));"
+      }
+    },
+    {
+      "id": "render-adapter-enabled",
+      "name": "Render Adapter Enabled",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        660,
+        120
+      ],
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 2
+          },
+          "conditions": [
+            {
+              "id": "Render Adapter Enabled",
+              "leftValue": "={{ $json.config.enabled === true }}",
+              "rightValue": true,
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      }
+    },
+    {
+      "id": "return-offline-render-check",
+      "name": "Return Offline Render Check",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        880,
+        320
+      ],
+      "parameters": {
+        "jsCode": "return [{json:{dry_run:true,adapter:'durable-source-render',calls_performed:false,receipt:null,release_eligible:false,next:'Configure private durable storage, trusted assets and guide worker; bind this inactive adapter to 03S only after integration review.'}}];"
+      }
+    },
+    {
+      "id": "check-render-configuration",
+      "name": "Check Render Configuration",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        880,
+        0
+      ],
+      "parameters": {
+        "jsCode": "const j=$input.first().json;if(j.handoff.schema_version!=='intake-receipt.v1'||j.handoff.accepted!==true||j.handoff.release_eligible!==false||!j.event_id||!j.handoff.benchmark_sha256||j.config.base_url.includes('REPLACE')||!j.config.base_url.startsWith('https://')||!Number.isInteger(j.config.max_polls)||j.config.max_polls<1||j.config.max_polls>120)throw Error('Stored accepted draft and configured HTTPS host required.');j.config.base_url=j.config.base_url.replace(/\\/$/,'');return [{json:j}];"
+      }
+    },
+    {
+      "id": "enqueue-stored-plan",
+      "name": "Enqueue Stored Plan",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        1100,
+        0
+      ],
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $items('Check Render Configuration')[0].json.config.base_url + '/intake/jobs/' + encodeURIComponent($items('Check Render Configuration')[0].json.event_id) + '/render/enqueue' }}",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({}) }}",
+        "options": {
+          "timeout": 60000
+        }
+      },
+      "onError": "continueRegularOutput",
+      "retryOnFail": false
+    },
+    {
+      "id": "read-render-state",
+      "name": "Read Render State",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1320,
+        0
+      ],
+      "parameters": {
+        "jsCode": "const r=$input.first().json,c=$items('Check Render Configuration')[0].json;const receipt=r.receipt;const complete=r.status==='completed_review'&&receipt?.schema_version==='render-review-receipt.v1'&&receipt.event_id===c.event_id&&receipt.benchmark_sha256===c.handoff.benchmark_sha256&&receipt.technical_qc==='pass'&&receipt.release_eligible===false;return [{json:{event_id:c.event_id,state:r,poll_count:$runIndex+1,complete,pending:r.ok===true&&['queued','running'].includes(r.status)&&$runIndex+1<=c.config.max_polls,release_eligible:false}}];"
+      }
+    },
+    {
+      "id": "review-video-ready",
+      "name": "Review Video Ready",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        1540,
+        0
+      ],
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 2
+          },
+          "conditions": [
+            {
+              "id": "Review Video Ready",
+              "leftValue": "={{ $json.complete === true }}",
+              "rightValue": true,
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      }
+    },
+    {
+      "id": "return-review-receipt",
+      "name": "Return Review Receipt",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1760,
+        -160
+      ],
+      "parameters": {
+        "jsCode": "const r=$input.first().json.state;return [{json:{...r.receipt,artifacts:r.artifacts,report:r.report,review:r.review,release_eligible:false}}];"
+      }
+    },
+    {
+      "id": "render-still-pending",
+      "name": "Render Still Pending",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        1760,
+        100
+      ],
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 2
+          },
+          "conditions": [
+            {
+              "id": "Render Still Pending",
+              "leftValue": "={{ $json.pending === true }}",
+              "rightValue": true,
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      }
+    },
+    {
+      "id": "wait-before-status-poll",
+      "name": "Wait Before Status Poll",
+      "type": "n8n-nodes-base.wait",
+      "typeVersion": 1.1,
+      "position": [
+        1980,
+        40
+      ],
+      "parameters": {
+        "resume": "timeInterval",
+        "amount": 10,
+        "unit": "seconds"
+      }
+    },
+    {
+      "id": "poll-stored-render",
+      "name": "Poll Stored Render",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        2200,
+        40
+      ],
+      "parameters": {
+        "method": "GET",
+        "url": "={{ $items('Check Render Configuration')[0].json.config.base_url + '/intake/jobs/' + encodeURIComponent($items('Check Render Configuration')[0].json.event_id) + '/render' }}",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "options": {
+          "timeout": 60000
+        }
+      },
+      "onError": "continueRegularOutput",
+      "retryOnFail": false
+    },
+    {
+      "id": "return-render-review-stop",
+      "name": "Return Render Review Stop",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1980,
+        240
+      ],
+      "parameters": {
+        "jsCode": "const j=$input.first().json,r=j.state;return [{json:{event_id:j.event_id,status:['queued','running'].includes(r.status)?'poll_limit_reached':r.status||'render_adapter_unavailable',server_status:r.status||null,reason:r.error||r.reason||'Review stored render status before continuing.',report:r.report||null,receipt:null,release_eligible:false}}];"
+      }
+    },
+    {
+      "id": "setup-notes",
+      "name": "Setup Notes",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [
+        440,
+        -460
+      ],
+      "parameters": {
+        "height": 400,
+        "width": 1000,
+        "content": "## Workflow 04R — Durable Source Plan → Composition → Review Render\nDRAFT / inactive / enabled=false. Manual run makes no service calls.\n\nBind the existing private intake host and Header Auth on both HTTP nodes. The server loads its accepted intelligence plan; no caller-supplied plan, asset paths or approval flags are trusted. Configure trusted benchmark assets, local measured guide narration and the opt-in durable render worker first.\n\nQueue inputs and asset bytes are frozen transactionally. Worker leases fence stale attempts; lost deterministic work can retry at most three times in isolated paths. Paid model reservations are not replayed by this worker.\n\nThe result is an authenticated review preview, not a published final. Unsupported components, timing, layout or QC failures stop for review. Polling is bounded at 120 waits; exhausting polls does not cancel or re-enqueue the server job. Read quality/DURABLE_SOURCE_RENDER_SETUP.md. No Telegram, Drive or Sheets writes are included."
+      }
+    }
+  ],
+  "connections": {
+    "Manual Dry Run": {
+      "main": [
+        [
+          {
+            "node": "Example Accepted Draft",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Example Accepted Draft": {
+      "main": [
+        [
+          {
+            "node": "Configure Render Adapter",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "When Executed By Intelligence": {
+      "main": [
+        [
+          {
+            "node": "Configure Render Adapter",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Configure Render Adapter": {
+      "main": [
+        [
+          {
+            "node": "Render Adapter Enabled",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Render Adapter Enabled": {
+      "main": [
+        [
+          {
+            "node": "Check Render Configuration",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Return Offline Render Check",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Check Render Configuration": {
+      "main": [
+        [
+          {
+            "node": "Enqueue Stored Plan",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Enqueue Stored Plan": {
+      "main": [
+        [
+          {
+            "node": "Read Render State",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Read Render State": {
+      "main": [
+        [
+          {
+            "node": "Review Video Ready",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Review Video Ready": {
+      "main": [
+        [
+          {
+            "node": "Return Review Receipt",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Render Still Pending",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Render Still Pending": {
+      "main": [
+        [
+          {
+            "node": "Wait Before Status Poll",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Return Render Review Stop",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Wait Before Status Poll": {
+      "main": [
+        [
+          {
+            "node": "Poll Stored Render",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Poll Stored Render": {
+      "main": [
+        [
+          {
+            "node": "Read Render State",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "pinData": {},
+  "meta": {
+    "templateCredsSetupCompleted": false
+  }
+}
