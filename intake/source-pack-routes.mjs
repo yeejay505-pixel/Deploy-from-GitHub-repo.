@@ -107,14 +107,7 @@ export function createSourcePackRoutes({app,directory,token,allowedChatIds=[],pu
       });
       let metadata={};try{metadata=pack.metadata?JSON.parse(pack.metadata):{};}catch{}
       return res.json({ok:true,schema_version:'source-pack-project.v2',project_id:projectId,chat_id:pack.chat_id,status:pack.status,brief_text:pack.brief_text,events:eventRows,assets,source_count:eventRows.length+assets.length,missing_visual_preview_count:missingVisualPreviewCount,metadata});
-    }catch(e){
-      // Failed first attempts remain retryable; only successful/handled deliveries
-      // keep their receipt.
-      if(receiptClaimed&&receiptKey){
-        try{db.prepare('DELETE FROM source_pack_update_receipts WHERE receipt_key=?').run(receiptKey);}catch{}
-      }
-      next(e);
-    }
+    }catch(e){next(e);}
   });
 
   router.post('/events',upload.single('source'),async(req,res,next)=>{
@@ -325,7 +318,14 @@ ${assets.map(a=>`- [${a.asset_type}] ${a.file_name} | ${a.url}`).join('\n')}${vi
       const updated=activePack(chatId);
       const c=counts(pack.project_id);
       return res.status(201).json(packResponse(updated,{action:'collect',reply_text:`✅ SOURCE ADDED\n\nProject: ${pack.project_id}\nCollected: ${c.total} source${c.total===1?'':'s'}\n\nKeep sending material, or send /build when finished.`}));
-    }catch(e){next(e);}
+    }catch(e){
+      // Failed collector operations must not consume their idempotency receipt.
+      // Otherwise Telegram retries can be silently discarded after a failed write.
+      if(receiptClaimed&&receiptKey){
+        try{db.prepare('DELETE FROM source_pack_update_receipts WHERE receipt_key=?').run(receiptKey);}catch{}
+      }
+      next(e);
+    }
   });
 
   router.use((err,req,res,next)=>{
